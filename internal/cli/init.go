@@ -1,0 +1,158 @@
+package cli
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/exequieldeferrari/axiom/internal/claude"
+	"github.com/exequieldeferrari/axiom/internal/store"
+)
+
+type initOptions struct {
+	global bool
+	dryRun bool
+}
+
+// runInit installs Axiom's Claude Code hooks.
+func runInit(args []string, stdout io.Writer) error {
+	opts, err := parseInitFlags(args)
+	if err != nil {
+		return err
+	}
+	exePath, err := axiomPath()
+	if err != nil {
+		return err
+	}
+	return runInstall(opts, exePath, stdout)
+}
+
+func parseInitFlags(args []string) (initOptions, error) {
+	flags := flag.NewFlagSet("init", flag.ContinueOnError)
+	// flag prints its own message; suppressing it keeps the output to one line.
+	flags.SetOutput(io.Discard)
+
+	var opts initOptions
+	flags.BoolVar(&opts.global, "global", false, "install for all projects in ~/.claude/settings.json")
+	flags.BoolVar(&opts.dryRun, "dry-run", false, "print the resulting settings without writing them")
+
+	if err := flags.Parse(args); err != nil {
+		return opts, &UsageError{Msg: err.Error()}
+	}
+	if flags.NArg() > 0 {
+		return opts, &UsageError{Msg: fmt.Sprintf("unexpected argument %q", flags.Arg(0))}
+	}
+	return opts, nil
+}
+
+func runInstall(opts initOptions, exePath string, stdout io.Writer) error {
+	settings, err := settingsPath(opts.global)
+	if err != nil {
+		return err
+	}
+
+	res, err := claude.InstallFile(settings, exePath, opts.dryRun)
+	if err != nil {
+		var conflict *claude.ConflictError
+		if errors.As(err, &conflict) {
+			return fmt.Errorf("%w\n%s was not modified; remove the existing hook to reinstall", conflict, settings)
+		}
+		return err
+	}
+
+	switch {
+	case opts.dryRun:
+		fmt.Fprintf(stdout, "Would write %s\n", settings)
+		fmt.Fprintf(stdout, "Hook command: %s hook claude\n", exePath)
+		fmt.Fprintf(stdout, "Events: %s\n\n", strings.Join(claude.HookEvents, ", "))
+		fmt.Fprintf(stdout, "%s", res.Content)
+	case !res.Changed:
+		fmt.Fprintf(stdout, "Axiom hooks are already installed in %s\n", settings)
+	default:
+		fmt.Fprintf(stdout, "Installed Axiom hooks in %s\n", settings)
+		fmt.Fprintf(stdout, "Events: %s\n", strings.Join(claude.HookEvents, ", "))
+		if dir, err := store.DefaultDir(); err == nil {
+			fmt.Fprintf(stdout, "Recording to %s\n", filepath.Join(dir, store.FileName))
+		}
+		if !opts.global {
+			fmt.Fprint(stdout, "\nNote: Claude Code only adds .claude/settings.local.json to your git excludes\n"+
+				"when it writes that file itself. Add it to .gitignore if you do not want it committed.\n")
+		}
+	}
+	return nil
+}
+
+// axiomPath resolves the binary Claude Code should run.
+//
+// The absolute path is used because a hook process does not necessarily
+// inherit the PATH that installed Axiom.
+func axiomPath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate the axiom binary: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+
+	// `go run` builds into a temporary directory that is deleted on exit, so a
+	// hook pointing there would break as soon as this process ends.
+	if tmp, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+		if strings.HasPrefix(exe, tmp+string(os.PathSeparator)) {
+			return "", errors.New("axiom is running from a temporary build; run 'make build' and use ./bin/axiom instead")
+		}
+	}
+	return exe, nil
+}
+
+// settingsPath chooses the Claude Code settings file to modify.
+//
+// The project default is settings.local.json rather than settings.json:
+// settings.json is meant to be committed, which would enable Axiom for
+// teammates who do not have the binary installed.
+func settingsPath(global bool) (string, error) {
+	if !global {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("determine the working directory: %w", err)
+		}
+		return filepath.Join(projectRoot(cwd), ".claude", "settings.local.json"), nil
+	}
+
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("determine the home directory: %w", err)
+		}
+		dir = filepath.Join(home, ".claude")
+	}
+	return filepath.Join(dir, "settings.json"), nil
+}
+
+// projectRoot finds the git repository root containing dir.
+//
+// Claude Code reads .claude/settings.local.json at the repository root, so
+// installing into a subdirectory would write a file it never reads. The
+// starting directory is kept outside a repository and when the repository root
+// is the home directory, matching Claude Code's own exceptions. A linked
+// worktree resolves to the worktree rather than to the main checkout, where
+// Claude Code would look.
+func projectRoot(cwd string) string {
+	home, _ := os.UserHomeDir()
+	for dir := cwd; dir != home; {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return cwd
+}
