@@ -42,6 +42,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	case "version", "-v", "--version":
 		_, err := fmt.Fprintf(stdout, "axiom %s\n", version.Version)
 		return err
+	case "init":
+		return reportUsage(stderr, runInit(args[2:], stdout))
+	case "hook":
+		return reportUsage(stderr, runHook(args[2:]))
 	default:
 		err := &UsageError{Msg: fmt.Sprintf("unknown command %q", cmd)}
 		fmt.Fprintf(stderr, "axiom: %v\n\n", err)
@@ -50,13 +54,24 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
+// reportUsage prints subcommand usage errors without dumping the root help,
+// which would bury a one-line mistake.
+func reportUsage(stderr io.Writer, err error) error {
+	if IsUsage(err) {
+		fmt.Fprintf(stderr, "axiom: %v\n", err)
+	}
+	return err
+}
+
 func printRootHelp(w io.Writer) {
-	const help = `Axiom is an observability and efficiency toolkit for AI coding agents.
+	const help = `Axiom is a profiler for AI coding agents.
 
 Usage:
   axiom <command>
 
 Commands:
+  init        Install the Claude Code integration
+  hook        Record an agent event (invoked by agent hooks, not by hand)
   help        Show this help message
   version     Print the axiom version
 

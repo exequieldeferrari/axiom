@@ -23,9 +23,11 @@ func TestRun_NoArgs_PrintsHelp(t *testing.T) {
 
 	out := stdout.String()
 	for _, want := range []string{
-		"Axiom is an observability and efficiency toolkit",
+		"Axiom is a profiler for AI coding agents",
 		"Usage:",
 		"axiom <command>",
+		"init",
+		"hook",
 		"help",
 		"version",
 	} {
