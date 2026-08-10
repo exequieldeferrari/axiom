@@ -23,43 +23,44 @@ and recommend second.
 
 ## Status
 
-Early. Axiom currently **records** agent activity. It does not analyze it yet.
+Early. Axiom **records** agent activity and reports **redundant work** it can
+prove from that record.
 
 What works today:
 
 - A passive Claude Code integration that observes session and tool events
 - An agent-neutral event model
 - A local append-only event log
+- A profiler that reports repeated shell commands and repeated file reads
 
-Not built yet: the profiler, findings, recommendations, cost and token
-accounting, and support for agents other than Claude Code.
+Not built yet: repeated-search detection, failure-loop detection, cost and token
+accounting, recommendations, and support for agents other than Claude Code.
 
 ## How it works
 
 ```mermaid
-flowchart LR
-    Agent["AI Coding Agent"] --> Adapter["Agent Adapter"]
-    Adapter --> Events["Canonical Events"]
-    Events --> Store["Local Store"]
+flowchart TD
+    Claude["Claude Code"] -->|hooks| Adapter["Claude adapter"]
+    Future["Codex · Gemini CLI · Cursor · OpenCode"] -.->|future adapters| Events
+    Adapter --> Events["Canonical events<br/>agent-neutral"]
+    Events --> Store["Append-only JSONL store"]
     Store --> Profiler["Profiler"]
-
-    Profiler --> Context["Context Waste"]
-    Profiler --> Work["Redundant Work"]
-    Profiler --> Loops["Failure Loops"]
-    Profiler --> Cost["Cost & Latency"]
+    Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
+    Profiler --> Loops["Failure loops"]
+    Profiler --> Cost["Context & cost"]
+    Redundant --> CLI["axiom profile"]
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Agent,Adapter,Events,Store built
-    class Profiler,Context,Work,Loops,Cost planned
+    class Claude,Adapter,Events,Store,Profiler,Redundant,CLI built
+    class Future,Loops,Cost planned
 ```
 
-Solid boxes exist today. Dashed boxes are roadmap: **Axiom records events and
-does not yet analyze them.**
+Solid boxes exist today; dashed boxes are roadmap.
 
-Claude Code is the first supported agent. The event model deliberately contains
-no Claude-specific concepts, so other agents become adapters rather than
-rewrites.
+Everything below the canonical event boundary is written against Axiom's own
+event model, not against Claude Code. That is what makes a second agent an
+adapter rather than a second profiler.
 
 ## Philosophy
 
@@ -68,7 +69,8 @@ flowchart LR
     Observe --> Understand --> Explain --> Optimize --> Prove
 ```
 
-Each step depends on the one before it. Axiom is at *Observe*.
+Each step depends on the one before it. Axiom observes and explains. It does not
+optimize anything, and it never changes what your agent does.
 
 ## Requirements
 
@@ -91,6 +93,7 @@ axiom version            # print version
 axiom init --dry-run     # preview the Claude Code hook installation
 axiom init               # install hooks for this project
 axiom init --global      # install hooks for all your projects
+axiom profile            # analyze recorded events
 ```
 
 `axiom hook claude` is the machine-facing entrypoint Claude Code calls. You do
@@ -117,6 +120,64 @@ Installation is conservative:
 
 Claude Code adds `.claude/settings.local.json` to your git excludes only when it
 writes that file itself. If Axiom creates it, add it to your `.gitignore`.
+
+## Profiling
+
+`axiom profile` analyzes the recorded events and reports repeated work. It only
+ever reads the log.
+
+```console
+$ axiom profile
+Axiom Profile
+─────────────
+
+Events              29
+Sessions analyzed   2
+Tool calls          25
+
+Redundant work
+
+  No high-confidence redundant work detected.
+```
+
+A quiet report is a real result. Axiom would rather miss redundant work than
+invent it, so it only reports repetition it can justify:
+
+```console
+  HIGH  Repeated shell operation                   session 7b4d3ab1
+        Executed 3 times, with only read-only operations in between
+        Potentially redundant executions  2
+        Repeated-call tool time           640ms
+        Command digest                    3f1c0a9e77b4…
+        Window                            2026-08-10 20:25:04 → 20:29:11 UTC
+```
+
+### What Axiom will and will not call redundant
+
+Repetition only counts inside a single session, and inside a single subagent
+within it. A later session legitimately redoes work because the agent no longer
+remembers it, so cross-session repetition is never reported. The same applies
+when Claude Code compacts or clears context mid-session.
+
+A repeated **shell command** is reported when the same command digest runs more
+than once with nothing but read-only operations in between. Any file edit, any
+other command, or anything Axiom cannot interpret ends the sequence, because all
+of them are ordinary reasons to run something again.
+
+A repeated **file read** is reported when the same file is read more than once
+with no observed modification and no unobservable operation in between. Axiom
+never claims the file was unchanged — only that it saw nothing change it. A
+command such as `gofmt -w`, an MCP tool, or your own editor can modify a file
+without Axiom knowing, which is precisely why anything opaque ends the sequence.
+
+Retries do not count as redundancy: a command re-run after failing is a retry,
+and failure-loop analysis is a separate concern Axiom does not tackle yet.
+
+`Repeated-call tool time` is how long the repeated calls took to execute, not
+counting the first. It is not the total time of the operation, and it measures
+nothing about context, tokens, or cost. For file reads it is usually a few
+milliseconds — the cost of a redundant read is the context it consumes, which
+Axiom does not estimate.
 
 ## Where events go
 
@@ -193,6 +254,8 @@ read:
   `/clear` and after compaction, so one sitting can span several session IDs.
 - **Durations exclude waiting on you.** Claude Code reports tool execution time,
   not the time spent in permission prompts.
+- **Recorded order only approximates execution order.** Hooks run as parallel
+  processes, so two tool calls that overlapped may be recorded in either order.
 
 ## Non-interference
 

@@ -46,6 +46,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return reportUsage(stderr, runInit(args[2:], stdout))
 	case "hook":
 		return reportUsage(stderr, runHook(args[2:]))
+	case "profile":
+		return reportUsage(stderr, runProfile(args[2:], stdout))
 	default:
 		err := &UsageError{Msg: fmt.Sprintf("unknown command %q", cmd)}
 		fmt.Fprintf(stderr, "axiom: %v\n\n", err)
@@ -71,6 +73,7 @@ Usage:
 
 Commands:
   init        Install the Claude Code integration
+  profile     Analyze recorded events and report redundant work
   hook        Record an agent event (invoked by agent hooks, not by hand)
   help        Show this help message
   version     Print the axiom version
