@@ -27,6 +27,7 @@ func TestRun_NoArgs_PrintsHelp(t *testing.T) {
 		"Usage:",
 		"axiom <command>",
 		"init",
+		"profile",
 		"hook",
 		"help",
 		"version",
