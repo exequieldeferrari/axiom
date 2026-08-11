@@ -109,9 +109,9 @@ func TestProfileReportsARepeatedFailedAttempt(t *testing.T) {
 	if got := value(t, out, "Failure digest"); got != "30303e9585c1…" {
 		t.Errorf("Failure digest = %q", got)
 	}
-	// A failed attempt returns nothing the agent measures, and calling
-	// anything here redundant output would describe it as work that produced
-	// something.
+	// The agent reported no size for these attempts, so there is nothing
+	// measured to call redundant output, and printing one would describe a
+	// failed attempt as work that produced something.
 	if strings.Contains(out, "Redundant tool output") {
 		t.Errorf("a failed attempt was reported as redundant output:\n%s", out)
 	}

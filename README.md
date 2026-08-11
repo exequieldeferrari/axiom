@@ -33,8 +33,9 @@ and recommend second.
 
 ## Status
 
-Early. Axiom **records** agent activity and reports the **repeated work** and
-**repeated failed attempts** it can prove from that record.
+Early. Axiom **records** agent activity, **profiles** where that work happened,
+and reports the **repeated work** and **repeated failed attempts** it can prove
+from the record.
 
 What works today:
 
@@ -42,14 +43,17 @@ What works today:
 - An OTLP receiver that records what Claude Code reports consuming
 - An agent-neutral event model
 - Local append-only logs, one per stream
+- A profile of the observed work: what the execution consisted of, and the paths
+  it happened at
+- Measured read bytes per path, when a receiver recorded them
 - A profiler that reports repeated shell commands and repeated file reads
 - Repeated failed attempts at the same shell command
 - Measured tool output for redundant calls, when a receiver recorded it
 - The consumption observed in the turns a finding happened in
 
-Not built yet: repeated-search detection, recommendations, and support for
-agents other than Claude Code. Axiom reports consumption it observed but does
-not attribute it, and makes no savings claims.
+Not built yet: repeated-search detection, recommendations, comparison between
+executions, and support for agents other than Claude Code. Axiom reports
+consumption it observed but does not attribute it, and makes no savings claims.
 
 ## How it works
 
@@ -67,19 +71,21 @@ flowchart TD
     Events --> EventLog["events.jsonl"]
     Usage --> UsageLog["usage.jsonl"]
 
+    EventLog --> Activity["Observed work<br/>composition · work by path"]
     EventLog --> Profiler["Profiler"]
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
     Profiler --> Failures["Repeated failed attempts"]
-    Profiler --> Churn["Context churn"]
     Redundant --> Correlate["Correlation<br/>session · turn · invocation"]
     Failures --> Correlate
     UsageLog --> Correlate
     Correlate --> CLI["axiom profile"]
+    Activity --> CLI
+    UsageLog --> Activity
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Profiler,Redundant,Failures,Correlate,CLI built
-    class Future,Churn planned
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Activity,Profiler,Redundant,Failures,Correlate,CLI built
+    class Future planned
 ```
 
 Solid boxes exist today; dashed boxes and dashed arrows are roadmap.
@@ -234,17 +240,35 @@ $ axiom profile
 Axiom Profile
 ─────────────
 
-Events              29
-Sessions analyzed   2
-Tool calls          25
+Events              21
+Sessions analyzed   1
+Tool calls          17
+
+Observed operations
+
+  File              8   read, written or edited; attributed by path below
+  Shell             9   effects not observable; never attributed
+
+Work by path, under /repo
+
+  README.md
+      1 read, 1 modification, 1 turn, 1.5 KB read, 6ms
+  internal/auth/token.go
+      1 read, 1 modification, 1 turn, 650 B read, 14ms
+  internal/auth/validate.go
+      1 read, 1 turn, 462 B read, 2ms
 
 Findings
 
   No high-confidence redundant work or repeated failed attempts detected.
 ```
 
-A quiet report is a real result. Axiom would rather miss redundant work than
-invent it, so it only reports repetition it can justify:
+The report has two halves that answer different questions. The profile above
+describes the work Axiom observed and where it happened; the findings below judge
+some of it. The captions each section prints are left out of this example.
+
+A quiet findings section is a real result. Axiom would rather miss redundant work
+than invent it, so it only reports repetition it can justify:
 
 ```console
   HIGH   Repeated shell operation                   session 7b4d3ab1
@@ -254,6 +278,52 @@ invent it, so it only reports repetition it can justify:
          Command digest                    3f1c0a9e77b4…
          Window                            2026-08-10 20:25:04 → 20:29:11 UTC
 ```
+
+### Observed work
+
+The profile counts every tool call that reached the log, exactly once, and says
+which shape of operation it was. The buckets add up to the tool call count above
+them, and the work attributed to paths adds up to the `File` bucket, so the two
+halves of the report can be reconciled rather than trusted.
+
+Being able to recognize an operation is not the same as being able to say where
+it happened. Only a file operation names a path. A shell command is recognized
+and permanently unattributable, because Axiom stores a digest of the command and
+never the command itself; a search records a root, which is where the agent
+looked rather than something it read; a nested agent's own calls are recorded
+against that agent. So a line like this is not a footnote, it is the scope of
+everything below it:
+
+```console
+The lines above describe the 8 of 17 observed tool calls that named a path.
+```
+
+Each path reports its own work: reads of a whole file, ranged reads of part of
+one, writes and edits together as modifications, and operations that failed. A
+failed read is not established to have delivered the file's contents and a failed
+edit may have applied in part, so neither counts as a successful read or a
+modification — but both happened, and both are shown. A category with none
+observed is left off the line, because zero there is a fact Axiom established.
+
+Identity is the exact path the agent named. Nothing is normalized: resolving a
+relative path would mean trusting a working directory Axiom did not observe at
+the moment of the call, so a relative path and its absolute form are two
+separate lines. The shared directory printed in the heading is display only.
+
+`Read bytes` is what the agent reported returning to the successful reads of that
+path, and appears only when there was at least one of them and every one was
+measured exactly once. A failed read is outside that total, which says what the
+total describes rather than what the failed read returned: Axiom records whether
+a call failed and never what it returned. `turns` counts the distinct turns the
+work happened in, and the time is the sum of the durations the agent reported —
+tool execution time, not elapsed time, and never anything about the model. Where
+Axiom could not establish a value completely it prints a dash, which never means
+zero.
+
+Counts here are operations and never repetition. Two agents working on one file
+add up at that path because that is where the work happened; whether any of it
+repeated anything is a separate question, answered under the stricter rules
+below.
 
 ### What Axiom will and will not call redundant
 
@@ -354,8 +424,9 @@ between is not evidence of what made the difference, so nothing here is called
 a recovery or a fix. The line's absence means only that Axiom never saw that
 command succeed — never that the agent failed to get past it.
 
-Failed attempts are not measured in bytes. Agents report no result size for a
-call that failed, so there is nothing to measure and nothing is estimated.
+Failed attempts are not measured in bytes. In every capture Axiom has, the agent
+reported no result size for a call that failed, so there is nothing measured to
+report and nothing is estimated.
 
 ### What the turn consumed
 
@@ -545,6 +616,10 @@ read:
 - **Usage adds to findings but never creates them.** The two streams are joined
   on identifiers both carry, so a measurement can put a number on behavior the
   event log already proved, and nothing else.
+- **Most shell work cannot be placed.** A command's text is never stored, so
+  Axiom knows a command ran but not which files it touched. In real sessions
+  shell is a large share of the execution, which is why the profile states how
+  much of it named a path instead of quietly describing the rest.
 
 ## Non-interference
 

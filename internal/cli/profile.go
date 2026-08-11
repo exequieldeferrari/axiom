@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exequieldeferrari/axiom/internal/activity"
 	"github.com/exequieldeferrari/axiom/internal/correlate"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/store"
@@ -38,17 +39,27 @@ func profileLog(dir string, stdout io.Writer) error {
 	}
 	defer scanner.Close()
 
+	// Measurements are indexed first because the profile resolves them as each
+	// read arrives, and a measurement read afterwards would arrive too late to
+	// be attached to anything.
+	usage := loadUsage(dir)
 	p := profiler.New()
+	a := activity.New(func(session, turn, invocation string) (int64, bool) {
+		return usage.index.ResultBytes(correlate.Key{
+			SessionID: session, TurnID: turn, InvocationID: invocation,
+		})
+	})
 	for scanner.Scan() {
-		p.Add(scanner.Record())
+		record := scanner.Record()
+		p.Add(record)
+		a.Add(record)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
 
 	report := p.Report()
-	usage := loadUsage(dir)
-	writeReport(stdout, report, usage.index.Measure(report.Findings), scanner.Stats(), usage)
+	writeReport(stdout, report, a.Profile(), usage.index.Measure(report.Findings), scanner.Stats(), usage)
 	return nil
 }
 
@@ -124,7 +135,7 @@ const (
 	noFindingsMessage = "  No high-confidence redundant work or repeated failed attempts detected.\n"
 )
 
-func writeReport(w io.Writer, r profiler.Report, findings []correlate.Measured, stats store.ScanStats, usage usageLog) {
+func writeReport(w io.Writer, r profiler.Report, p activity.Profile, findings []correlate.Measured, stats store.ScanStats, usage usageLog) {
 	fmt.Fprint(w, "Axiom Profile\n─────────────\n\n")
 	count(w, "Events", r.Events)
 	count(w, "Sessions analyzed", r.Sessions)
@@ -146,6 +157,8 @@ func writeReport(w io.Writer, r profiler.Report, findings []correlate.Measured, 
 		fmt.Fprintf(w, "\nWarning: the usage log could not be read (%v); findings are unmeasured.\n",
 			usage.unreadable)
 	}
+
+	writeActivity(w, p)
 
 	fmt.Fprint(w, "\nFindings\n\n")
 	if len(findings) == 0 {
