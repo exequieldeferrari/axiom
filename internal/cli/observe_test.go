@@ -87,14 +87,15 @@ func TestObserveRecordsUsage(t *testing.T) {
 	for scanner.Scan() {
 		kinds = append(kinds, scanner.Record().Kind)
 	}
-	// The export carries four records; only the two measurements are kept.
-	if len(kinds) != 2 {
-		t.Fatalf("recorded %d records, want 2: %v", len(kinds), kinds)
+	// The export carries five records; only the three measurements are kept.
+	if len(kinds) != 3 {
+		t.Fatalf("recorded %d records, want 3: %v", len(kinds), kinds)
 	}
-	if kinds[0] != event.UsageModelRequest || kinds[1] != event.UsageToolResult {
+	if kinds[0] != event.UsageModelRequest || kinds[1] != event.UsageModelRequest ||
+		kinds[2] != event.UsageToolResult {
 		t.Errorf("kinds = %v", kinds)
 	}
-	if !strings.Contains(out, "Recorded 2 usage records") {
+	if !strings.Contains(out, "Recorded 3 usage records") {
 		t.Errorf("summary missing from output:\n%s", out)
 	}
 }

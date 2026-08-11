@@ -102,10 +102,17 @@ func loadUsage(dir string) usageLog {
 const (
 	countLabelWidth = 20
 	// Wide enough to leave a gap after the longest detail label.
-	detailLabelWidth  = 34
-	headlineWidth     = 42
-	digestDisplayLen  = 12
-	findingIndent     = "        "
+	detailLabelWidth = 34
+	headlineWidth    = 42
+	digestDisplayLen = 12
+	findingIndent    = "        "
+	// Associated consumption is indented under its own heading, and its
+	// labels are narrowed to match so the values stay in one column.
+	associatedIndent     = findingIndent + "  "
+	associatedLabelWidth = detailLabelWidth - 2
+	// The scope is filled in by consumptionScope, and the break keeps the
+	// longest of them inside the report's width.
+	associationCaveat = "This is the observed model consumption\nfor %s, not the cost of the repetition.\n"
 	scopeExplanation  = "Analysis is scoped to a single session and subagent: work repeated in a\nlater session is not counted, because the agent's context may legitimately\nhave been lost in between.\n"
 	observedCaveat    = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
 	measuredCaveat    = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
@@ -179,7 +186,64 @@ func writeFinding(w io.Writer, f correlate.Measured) {
 		detail(w, "Command digest", shortDigest(f.CommandDigest))
 	}
 	detail(w, "Window", window(f.First, f.Last))
+	if f.Associated != nil {
+		writeAssociated(w, *f.Associated)
+	}
 	fmt.Fprintln(w)
+}
+
+// writeAssociated reports what the agent consumed while doing everything else
+// it did in the same turns.
+//
+// It is set apart from the finding's own measurements, and says in a sentence
+// what it is, because a token count printed beside a defect reads as the cost
+// of that defect unless something stops it. Nothing here is attributable to
+// the repetition, and the heading has to carry that before the numbers do.
+func writeAssociated(w io.Writer, c correlate.Consumption) {
+	heading, scope := consumptionScope(c)
+	fmt.Fprintf(w, "\n%s%s\n", findingIndent, heading)
+
+	associated(w, "Model requests", thousands(int64(c.Requests)))
+	// A withheld dimension is left out rather than printed as zero: the agent
+	// reporting nothing and the agent reporting none are different facts.
+	if c.Tokens != nil {
+		associated(w, "Input tokens", thousands(c.Tokens.Input))
+		associated(w, "Output tokens", thousands(c.Tokens.Output))
+		associated(w, "Cache read", thousands(c.Tokens.CacheRead))
+		associated(w, "Cache creation", thousands(c.Tokens.CacheCreation))
+	}
+	if c.CostMicros != nil {
+		associated(w, "Model cost", dollars(*c.CostMicros))
+	}
+	for line := range strings.Lines(fmt.Sprintf(associationCaveat, scope)) {
+		fmt.Fprintf(w, "%s%s", associatedIndent, line)
+	}
+}
+
+// consumptionScope says how much of a finding the block below it covers.
+//
+// The turns a finding spans come from the behavior stream and are stated as
+// they are. Telemetry decides how many of them Axiom saw, so incomplete
+// evidence is reported as incomplete coverage rather than as a finding that
+// happened in fewer places than it did.
+//
+// The returned scope names the turns the totals actually came from, so the
+// caveat below the numbers cannot be read as covering the rest.
+func consumptionScope(c correlate.Consumption) (heading, scope string) {
+	if c.ObservedTurns < c.AffectedTurns {
+		heading = fmt.Sprintf("Observed model consumption in %d of the %d turns where this happened",
+			c.ObservedTurns, c.AffectedTurns)
+		if c.ObservedTurns == 1 {
+			return heading, "the turn it was recorded in"
+		}
+		return heading, "the turns it was recorded in"
+	}
+
+	if c.AffectedTurns == 1 {
+		return "Observed model consumption in the turn where this happened", "that turn"
+	}
+	return fmt.Sprintf("Observed model consumption in the %d turns where this happened", c.AffectedTurns),
+		"those turns"
 }
 
 // attribution names the context the work belongs to. A subagent has its own
@@ -277,4 +341,34 @@ func count(w io.Writer, label string, n int) {
 
 func detail(w io.Writer, label, value string) {
 	fmt.Fprintf(w, "%s%-*s%s\n", findingIndent, detailLabelWidth, label, value)
+}
+
+func associated(w io.Writer, label, value string) {
+	fmt.Fprintf(w, "%s%-*s%s\n", associatedIndent, associatedLabelWidth, label, value)
+}
+
+// thousands groups a count so that six figures of cache reads can be read at a
+// glance instead of counted digit by digit.
+func thousands(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	sign := ""
+	if strings.HasPrefix(s, "-") {
+		sign, s = "-", s[1:]
+	}
+
+	var b strings.Builder
+	for i, digit := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(digit)
+	}
+	return sign + b.String()
+}
+
+// dollars renders the agent's own cost estimate. The estimate is recorded in
+// millionths, and four places keep a fraction of a cent visible without
+// implying the agent measured more precision than it reported.
+func dollars(micros int64) string {
+	return fmt.Sprintf("$%.4f", float64(micros)/1e6)
 }

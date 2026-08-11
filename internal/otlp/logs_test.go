@@ -29,9 +29,12 @@ func decode(t *testing.T, data []byte) map[string]otlp.Record {
 	if err != nil {
 		t.Fatalf("DecodeLogs: %v", err)
 	}
+	// The fixture repeats a record kind, so the first of each is kept.
 	byName := make(map[string]otlp.Record, len(records))
 	for _, r := range records {
-		byName[r.Name] = r
+		if _, seen := byName[r.Name]; !seen {
+			byName[r.Name] = r
+		}
 	}
 	return byName
 }
@@ -43,8 +46,8 @@ func TestDecodeRealExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeLogs: %v", err)
 	}
-	if len(records) != 4 {
-		t.Fatalf("decoded %d records, want the 4 in the fixture", len(records))
+	if len(records) != 5 {
+		t.Fatalf("decoded %d records, want the 5 in the fixture", len(records))
 	}
 
 	// Records arrive flattened, in the order the agent sent them.
@@ -52,7 +55,7 @@ func TestDecodeRealExport(t *testing.T) {
 	for _, r := range records {
 		names = append(names, r.Name)
 	}
-	want := "hook_registered user_prompt api_request tool_result"
+	want := "hook_registered user_prompt api_request api_request tool_result"
 	if got := strings.Join(names, " "); got != want {
 		t.Errorf("names = %q, want %q", got, want)
 	}
