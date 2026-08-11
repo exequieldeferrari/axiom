@@ -45,6 +45,14 @@ type Finding struct {
 	Occurrences int
 	Redundant   int
 
+	// Calls identifies every occurrence in the order observed. Calls[0] did
+	// the work first and so repeated nothing; the rest are the redundant
+	// ones. Identity is recorded here, while the run is being observed,
+	// because nothing later can recover which occurrence was which: the two
+	// recorded streams are written independently and their timestamps
+	// interleave.
+	Calls []Call
+
 	// First and Last bound the run.
 	First time.Time
 	Last  time.Time
@@ -60,6 +68,18 @@ type Finding struct {
 	// CommandDigest identifies the command for KindRepeatedShell. The command
 	// itself is never recorded and cannot be recovered from the digest.
 	CommandDigest string
+}
+
+// Call identifies one occurrence of a repeated operation.
+//
+// The identifiers are the agent's own, carried through unchanged, so that a
+// measurement the same agent reported elsewhere can be attached to the exact
+// occurrence it belongs to. A finding remains complete evidence without them:
+// an agent that reports no identifiers still produces findings, which simply
+// cannot be joined to anything.
+type Call struct {
+	TurnID       string
+	InvocationID string
 }
 
 // Report summarizes one analysis of the event log.

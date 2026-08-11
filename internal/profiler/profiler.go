@@ -49,11 +49,13 @@ type scope struct {
 // as anything happens that could make repeating the operation worthwhile.
 type run struct {
 	subject string
-	count   int
-	first   time.Time
-	last    time.Time
-	total   time.Duration
-	timed   bool
+	// calls holds one entry per occurrence, in the order observed, and so is
+	// also the occurrence count.
+	calls []Call
+	first time.Time
+	last  time.Time
+	total time.Duration
+	timed bool
 }
 
 // Add records one event.
@@ -202,7 +204,7 @@ func (rs runs) extend(subject string, ev event.Event) {
 	if !ok {
 		rs[subject] = &run{
 			subject: subject,
-			count:   1,
+			calls:   []Call{call(ev)},
 			first:   ev.Timestamp,
 			last:    ev.Timestamp,
 			timed:   true,
@@ -210,7 +212,7 @@ func (rs runs) extend(subject string, ev event.Event) {
 		return
 	}
 
-	r.count++
+	r.calls = append(r.calls, call(ev))
 	// Hooks run as parallel processes, so a later event can carry an earlier
 	// timestamp. Widening the window keeps it from reading backwards.
 	if ev.Timestamp.Before(r.first) {
@@ -227,20 +229,29 @@ func (rs runs) extend(subject string, ev event.Event) {
 	}
 }
 
+func call(ev event.Event) Call {
+	return Call{TurnID: ev.TurnID, InvocationID: ev.Tool.InvocationID}
+}
+
 func (r *run) finding(kind Kind, key scopeKey) (Finding, bool) {
-	if r.count < 2 {
+	if len(r.calls) < 2 {
 		return Finding{}, false
 	}
 
 	f := Finding{
-		Kind:        kind,
-		Confidence:  ConfidenceHigh,
-		SessionID:   key.session,
-		SubagentID:  key.subagent,
-		Occurrences: r.count,
-		Redundant:   r.count - 1,
-		First:       r.first,
-		Last:        r.last,
+		Kind:       kind,
+		Confidence: ConfidenceHigh,
+		SessionID:  key.session,
+		SubagentID: key.subagent,
+		// Both counts come from the occurrence list so that they cannot
+		// disagree with the identities reported alongside them.
+		Occurrences: len(r.calls),
+		Redundant:   len(r.calls) - 1,
+		// A run may be reported while it is still open, so the finding gets
+		// its own copy rather than a view that later occurrences could grow.
+		Calls: slices.Clone(r.calls),
+		First: r.first,
+		Last:  r.last,
 	}
 	if r.timed {
 		total := r.total
