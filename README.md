@@ -15,6 +15,7 @@
 <p align="center">
   <em>Correctness first. Measure before optimizing.</em>
 </p>
+
 ## Why Axiom?
 
 Most tooling can tell you *how much* an agent consumed: tokens, dollars,
