@@ -16,6 +16,7 @@ type stream struct {
 	events  []event.Event
 	now     time.Time
 	session string
+	turn    string
 	nested  string
 }
 
@@ -32,6 +33,12 @@ func (s *stream) as(session string) *stream {
 	return s
 }
 
+// inTurn directs later events at a different turn of the same session.
+func (s *stream) inTurn(id string) *stream {
+	s.turn = id
+	return s
+}
+
 // inSubagent directs later events at a nested agent within the same session.
 func (s *stream) inSubagent(id string) *stream {
 	s.nested = id
@@ -44,6 +51,7 @@ func (s *stream) add(ev event.Event) *stream {
 	ev.Agent = "test"
 	ev.Timestamp = s.now
 	ev.SessionID = s.session
+	ev.TurnID = s.turn
 	ev.SubagentID = s.nested
 	s.events = append(s.events, ev)
 	return s
@@ -56,6 +64,11 @@ func untimed(t *event.ToolCall) { t.DurationMS = nil }
 
 func took(ms int64) option {
 	return func(t *event.ToolCall) { t.DurationMS = &ms }
+}
+
+// invocation gives a call the identifier the agent used for it.
+func invocation(id string) option {
+	return func(t *event.ToolCall) { t.InvocationID = id }
 }
 
 func (s *stream) tool(name string, md *event.ToolMetadata, opts ...option) *stream {
@@ -450,6 +463,102 @@ func TestMissingDurationIsNotReportedAsZero(t *testing.T) {
 	}
 	if got := report.Findings[0].ObservedTotal; got != nil {
 		t.Errorf("ObservedTotal = %v, want nil when a duration is missing", got)
+	}
+}
+
+// Identity has to be recorded as the run is observed. Which occurrence was
+// which cannot be recovered afterwards.
+func TestFindingIdentifiesEveryOccurrenceInOrder(t *testing.T) {
+	t.Parallel()
+
+	report := analyze(newStream("a").inTurn("turn-1").
+		read("/src/main.go", invocation("call-1")).
+		read("/src/main.go", invocation("call-2")).
+		inTurn("turn-2").
+		read("/src/main.go", invocation("call-3")))
+
+	if len(report.Findings) != 1 {
+		t.Fatalf("got %d findings, want 1", len(report.Findings))
+	}
+	f := report.Findings[0]
+
+	want := []profiler.Call{
+		{TurnID: "turn-1", InvocationID: "call-1"},
+		{TurnID: "turn-1", InvocationID: "call-2"},
+		{TurnID: "turn-2", InvocationID: "call-3"},
+	}
+	if len(f.Calls) != len(want) {
+		t.Fatalf("got %d calls, want %d: %+v", len(f.Calls), len(want), f.Calls)
+	}
+	for i := range want {
+		if f.Calls[i] != want[i] {
+			t.Errorf("Calls[%d] = %+v, want %+v", i, f.Calls[i], want[i])
+		}
+	}
+}
+
+// The counts describe the same occurrences the identities do, so a reader
+// cannot be told about two repeats and handed three identities.
+func TestOccurrenceCountsMatchTheIdentities(t *testing.T) {
+	t.Parallel()
+
+	report := analyze(newStream("a").
+		read("/src/main.go", invocation("call-1")).
+		read("/src/main.go", invocation("call-2")).
+		read("/src/main.go", invocation("call-3")))
+
+	f := report.Findings[0]
+	if f.Occurrences != len(f.Calls) {
+		t.Errorf("Occurrences = %d, want %d", f.Occurrences, len(f.Calls))
+	}
+	if f.Redundant != len(f.Calls)-1 {
+		t.Errorf("Redundant = %d, want %d", f.Redundant, len(f.Calls)-1)
+	}
+}
+
+// An agent that reports no invocation identifiers still produces findings.
+// Only the join to a measurement is lost.
+func TestOccurrenceIdentityIsOptional(t *testing.T) {
+	t.Parallel()
+
+	report := analyze(newStream("a").
+		read("/src/main.go").
+		read("/src/main.go"))
+
+	f := report.Findings[0]
+	if f.Occurrences != 2 {
+		t.Errorf("Occurrences = %d, want 2", f.Occurrences)
+	}
+	for i, c := range f.Calls {
+		if c.InvocationID != "" {
+			t.Errorf("Calls[%d].InvocationID = %q, want empty", i, c.InvocationID)
+		}
+	}
+}
+
+// A run reported while it is still open keeps growing. The finding already
+// handed out must not grow with it.
+func TestReportedCallsAreNotAffectedByLaterOccurrences(t *testing.T) {
+	t.Parallel()
+
+	p := profiler.New()
+	s := newStream("a").
+		read("/src/main.go", invocation("call-1")).
+		read("/src/main.go", invocation("call-2"))
+	for _, ev := range s.events {
+		p.Add(ev)
+	}
+
+	before := p.Report().Findings[0]
+	for _, ev := range newStream("a").read("/src/main.go", invocation("call-3")).events {
+		p.Add(ev)
+	}
+
+	if len(before.Calls) != 2 {
+		t.Errorf("earlier finding now reports %d calls, want 2: %+v", len(before.Calls), before.Calls)
+	}
+	if got := len(p.Report().Findings[0].Calls); got != 3 {
+		t.Errorf("later finding reports %d calls, want 3", got)
 	}
 }
 

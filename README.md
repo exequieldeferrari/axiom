@@ -43,10 +43,10 @@ What works today:
 - An agent-neutral event model
 - Local append-only logs, one per stream
 - A profiler that reports repeated shell commands and repeated file reads
+- Measured tool output for redundant calls, when a receiver recorded it
 
-Not built yet: correlating behavior with consumption, repeated-search detection,
-failure-loop detection, recommendations, and support for agents other than
-Claude Code.
+Not built yet: token and cost analysis, repeated-search detection, failure-loop
+detection, recommendations, and support for agents other than Claude Code.
 
 ## How it works
 
@@ -65,14 +65,15 @@ flowchart TD
     Usage --> UsageLog["usage.jsonl"]
 
     EventLog --> Profiler["Profiler"]
-    UsageLog -.->|future correlation| Profiler
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
     Profiler --> Loops["Failure loops"]
-    Redundant --> CLI["axiom profile"]
+    Redundant --> Correlate["Correlation<br/>session · turn · invocation"]
+    UsageLog --> Correlate
+    Correlate --> CLI["axiom profile"]
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Profiler,Redundant,CLI built
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Profiler,Redundant,Correlate,CLI built
     class Future,Loops planned
 ```
 
@@ -81,8 +82,12 @@ Solid boxes exist today; dashed boxes and dashed arrows are roadmap.
 The two streams are deliberately independent. They have different writers and
 different lifetimes: hooks fire on every tool call, while usage records exist
 only while `axiom observe` is running. Keeping them apart is what lets Axiom
-tell "this session consumed nothing" from "nobody was listening". Joining them
-by tool invocation is future work.
+tell "this session consumed nothing" from "nobody was listening".
+
+They are joined only at the end, and only on identifiers both streams carry:
+the session, the turn, and the tool invocation. Behavior always comes from the
+event stream, so a measurement can add a number to a finding but can never
+create one.
 
 Everything below the canonical boundary is written against Axiom's own model,
 not against Claude Code. That is what makes a second agent an adapter rather
@@ -177,10 +182,10 @@ Press Ctrl-C to stop.
 Recorded 3 usage records in 43s.
 ```
 
-Each line describes only what that telemetry record itself reported. Axiom does
-not look anything up in the event log to fill in the gaps, because joining the
-two streams is a separate problem and guessing at it here would make the output
-look more certain than it is.
+Each line describes only what that telemetry record itself reported. The
+receiver never opens the event log: the two streams are joined by
+[`axiom profile`](#measured-redundant-output), deliberately and on identifiers
+alone, not by a live view guessing at what a record probably belongs to.
 
 **Usage is only recorded while `axiom observe` is running.** Nothing is queued
 or backfilled. If you were not listening, that telemetry is gone, which is why a
@@ -266,6 +271,31 @@ counting the first. It is not the total time of the operation, and it measures
 nothing about context, tokens, or cost. For file reads it is usually a few
 milliseconds — the cost of a redundant read is the context it consumes, which
 Axiom does not estimate.
+
+### Measured redundant output
+
+If a receiver was running (see [Recording usage](#recording-usage)), findings
+also report what the repeated calls actually returned:
+
+```console
+  HIGH  Repeated file read                         session 7b4d3ab1
+        Read 3 times, with no agent modification observed in between
+        Potentially redundant reads       2
+        Redundant tool output             15.0 KB
+        Repeated-call tool time           4ms
+        File                              /repo/internal/store/store.go
+        Window                            2026-08-10 20:25:04 → 20:25:09 UTC
+```
+
+The size is measured, never estimated. Axiom joins the two streams on the
+session, turn, and invocation identifiers both of them carry, sums only the
+repeated occurrences, and excludes the first call, which did the work. It is a
+count of bytes the agent reported returning — not tokens, and not cost.
+
+The line appears only when every repeated call was measured exactly once. When
+it is missing the total is unknown, which is the usual case: telemetry exists
+only for the time a receiver was running, and a measurement that is absent,
+duplicated, or sizeless is never treated as zero.
 
 ## Where the data goes
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exequieldeferrari/axiom/internal/correlate"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/store"
 )
@@ -45,8 +46,57 @@ func profileLog(dir string, stdout io.Writer) error {
 		return err
 	}
 
-	writeReport(stdout, p.Report(), scanner.Stats())
+	report := p.Report()
+	usage := loadUsage(dir)
+	writeReport(stdout, report, usage.index.Measure(report.Findings), scanner.Stats(), usage)
 	return nil
+}
+
+// usageLog is the outcome of reading the usage stream.
+//
+// A log that is absent and a log that could not be read leave findings equally
+// unmeasured, but they do not mean the same thing: the first is the ordinary
+// state of a machine where no receiver has run, and the second is a problem
+// only the user can resolve.
+type usageLog struct {
+	index *correlate.Index
+	stats store.ScanStats
+	// unreadable is set when measurements may exist but Axiom could not read
+	// them, and is nil when there were simply none to read.
+	unreadable error
+}
+
+// loadUsage indexes the measurements recorded beside the event log.
+//
+// Telemetry is optional and always will be: it exists only for the time a
+// receiver was running. Nothing here fails the analysis; the worst outcome is
+// findings without measurements.
+func loadUsage(dir string) usageLog {
+	log := usageLog{index: correlate.NewIndex()}
+
+	scanner, err := store.ScanUsage(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// No receiver has ever recorded here, which is the common case.
+		return log
+	case err != nil:
+		log.unreadable = err
+		return log
+	}
+	defer scanner.Close()
+
+	for scanner.Scan() {
+		log.index.Add(scanner.Record())
+	}
+	log.stats = scanner.Stats()
+	if err := scanner.Err(); err != nil {
+		// A log that could not be read in full is discarded rather than used
+		// in part: the record that would have made a measurement ambiguous
+		// may be exactly the one that was lost.
+		log.index = correlate.NewIndex()
+		log.unreadable = err
+	}
+	return log
 }
 
 const (
@@ -58,10 +108,11 @@ const (
 	findingIndent     = "        "
 	scopeExplanation  = "Analysis is scoped to a single session and subagent: work repeated in a\nlater session is not counted, because the agent's context may legitimately\nhave been lost in between.\n"
 	observedCaveat    = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
+	measuredCaveat    = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
 	noFindingsMessage = "  No high-confidence redundant work detected.\n"
 )
 
-func writeReport(w io.Writer, r profiler.Report, stats store.ScanStats) {
+func writeReport(w io.Writer, r profiler.Report, findings []correlate.Measured, stats store.ScanStats, usage usageLog) {
 	fmt.Fprint(w, "Axiom Profile\n─────────────\n\n")
 	count(w, "Events", r.Events)
 	count(w, "Sessions analyzed", r.Sessions)
@@ -71,24 +122,41 @@ func writeReport(w io.Writer, r profiler.Report, stats store.ScanStats) {
 		fmt.Fprintf(w, "\nWarning: %s skipped (%s); findings may be incomplete.\n",
 			plural(skipped, "record"), describeSkipped(stats))
 	}
+	// A usage record Axiom cannot read costs a measurement, not a finding.
+	if skipped := usage.stats.Skipped(); skipped > 0 {
+		fmt.Fprintf(w, "\nWarning: %s skipped (%s); some measurements are missing.\n",
+			plural(skipped, "usage record"), describeSkipped(usage.stats))
+	}
+	// Telemetry that is absent needs no explanation. Telemetry that exists and
+	// cannot be read does, or the missing measurements look like an absence of
+	// redundant output rather than an absence of evidence.
+	if usage.unreadable != nil {
+		fmt.Fprintf(w, "\nWarning: the usage log could not be read (%v); findings are unmeasured.\n",
+			usage.unreadable)
+	}
 
 	fmt.Fprint(w, "\nRedundant work\n\n")
-	if len(r.Findings) == 0 {
+	if len(findings) == 0 {
 		fmt.Fprint(w, noFindingsMessage)
 		fmt.Fprint(w, "\n"+scopeExplanation)
 		return
 	}
 
-	for _, f := range r.Findings {
+	measured := false
+	for _, f := range findings {
 		writeFinding(w, f)
+		measured = measured || f.RedundantBytes != nil
 	}
-	fmt.Fprintf(w, "%s.\n\n%s", plural(len(r.Findings), "finding"), observedCaveat)
+	fmt.Fprintf(w, "%s.\n\n%s", plural(len(findings), "finding"), observedCaveat)
+	if measured {
+		fmt.Fprint(w, "\n"+measuredCaveat)
+	}
 }
 
-func writeFinding(w io.Writer, f profiler.Finding) {
+func writeFinding(w io.Writer, f correlate.Measured) {
 	fmt.Fprintf(w, "  %-5s %-*s %s\n",
-		strings.ToUpper(string(f.Confidence)), headlineWidth, headline(f.Kind), attribution(f))
-	fmt.Fprintf(w, "%s%s\n", findingIndent, evidence(f))
+		strings.ToUpper(string(f.Confidence)), headlineWidth, headline(f.Kind), attribution(f.Finding))
+	fmt.Fprintf(w, "%s%s\n", findingIndent, evidence(f.Finding))
 
 	switch f.Kind {
 	case profiler.KindRepeatedRead:
@@ -96,7 +164,13 @@ func writeFinding(w io.Writer, f profiler.Finding) {
 	case profiler.KindRepeatedShell:
 		detail(w, "Potentially redundant executions", strconv.Itoa(f.Redundant))
 	}
-	detail(w, "Repeated-call tool time", observedTime(f))
+	// Shown only when every repeated call was measured exactly once. An
+	// absent line means the total is unknown, which is the usual case: it is
+	// not a measurement of zero.
+	if f.RedundantBytes != nil {
+		detail(w, "Redundant tool output", size(f.RedundantBytes))
+	}
+	detail(w, "Repeated-call tool time", observedTime(f.Finding))
 
 	switch f.Kind {
 	case profiler.KindRepeatedRead:
