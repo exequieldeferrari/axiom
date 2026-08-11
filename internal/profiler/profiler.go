@@ -125,16 +125,29 @@ func (p *Profiler) Report() Report {
 	}
 }
 
+// observedSuccess and observedFailure establish an outcome positively, and one
+// is never the absence of the other.
+//
+// Nothing validates this field on the way into or out of the log, so a record
+// can arrive carrying no outcome, and a later model may add a state this version
+// does not know. A test of "not success" would read both of those as failures,
+// which is the worst inference available from missing evidence. An outcome that
+// was not established is evidence of nothing.
+func observedSuccess(t *event.ToolCall) bool { return t.Outcome == event.OutcomeSuccess }
+func observedFailure(t *event.ToolCall) bool { return t.Outcome == event.OutcomeFailure }
+
 func (p *Profiler) observe(ev event.Event) {
 	sc := p.scope(ev)
 	o := classify(ev.Tool)
-	succeeded := ev.Tool.Outcome == event.OutcomeSuccess
 
 	switch o.kind {
 	case opRead:
-		// A failed read returns nothing, so it neither repeats earlier work
-		// nor makes later work redundant.
-		if succeeded {
+		// A read repeats earlier work, or makes later work redundant, only
+		// if the agent reported it succeeding. A read reported as failed is
+		// not established to have delivered the file's contents, and neither
+		// is one whose outcome was never established: the record says what
+		// became of a call, never what it returned.
+		if observedSuccess(ev.Tool) {
 			sc.reads.extend(o.subject, ev)
 		}
 
@@ -162,15 +175,28 @@ func (p *Profiler) observe(ev event.Event) {
 				p.endFailure(sc, other, false)
 			}
 		}
-		if !succeeded {
+		switch {
+		case observedFailure(ev.Tool):
 			// Running a command again after it failed is a retry, which is
 			// not redundancy but is a finding of its own.
 			p.end(sc, sc.shell, KindRepeatedShell, o.subject)
 			p.attempt(sc, ev, o.subject)
-			return
+
+		case observedSuccess(ev.Tool):
+			p.succeeded(sc, o.subject)
+			sc.shell.extend(o.subject, ev)
+
+		default:
+			// A record that does not say what became of the call is evidence
+			// of neither outcome. It can no more show a command failing again
+			// than show it getting past a failure, so it ends both sequences
+			// it could have belonged to and starts neither: the run of
+			// executions, because this one cannot be shown to have done what
+			// the others did, and the sequence of failed attempts, without the
+			// success that would have been noted on it.
+			p.end(sc, sc.shell, KindRepeatedShell, o.subject)
+			p.endFailure(sc, o.subject, false)
 		}
-		p.succeeded(sc, o.subject)
-		sc.shell.extend(o.subject, ev)
 
 	case opObserve:
 		// Searches and partial reads look at state without changing it.

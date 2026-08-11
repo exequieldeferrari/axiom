@@ -142,6 +142,21 @@ func (ix *Index) addRequest(u event.Usage) {
 	}
 }
 
+// ResultBytes reports what telemetry measured one invocation as returning.
+//
+// This is the package's join primitive: everything else that reports bytes is
+// built on it. An invocation that was never measured and one that was measured
+// more than once are equally unknown here, because duplicate records may
+// describe the same call twice or two different calls, and choosing one would
+// be a guess presented as a measurement.
+func (ix *Index) ResultBytes(k Key) (int64, bool) {
+	m, ok := ix.results[k]
+	if !ok || m.ambiguous || m.bytes == nil {
+		return 0, false
+	}
+	return *m.bytes, true
+}
+
 // Measured pairs a finding with what was measured for it. The finding itself
 // is unchanged: telemetry adds a measurement, never evidence.
 type Measured struct {
@@ -323,11 +338,11 @@ func (ix *Index) redundantBytes(f profiler.Finding) *int64 {
 		if c.InvocationID == "" {
 			return nil
 		}
-		m, ok := ix.results[Key{SessionID: f.SessionID, TurnID: c.TurnID, InvocationID: c.InvocationID}]
-		if !ok || m.ambiguous || m.bytes == nil {
+		b, ok := ix.ResultBytes(Key{SessionID: f.SessionID, TurnID: c.TurnID, InvocationID: c.InvocationID})
+		if !ok {
 			return nil
 		}
-		total += *m.bytes
+		total += b
 	}
 	return &total
 }

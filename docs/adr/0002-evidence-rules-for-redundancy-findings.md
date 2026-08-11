@@ -72,10 +72,13 @@ after the call returns, so what happened between two of them cannot be bounded.
 
 ### Only successful operations count, but failures still end runs
 
-A failed read returns nothing, so it neither repeats earlier work nor makes
-later work redundant; it is ignored entirely. Re-running a command after it
-failed is a retry, not redundancy, and retry analysis is deliberately a later
-milestone.
+A read reported as failed is not established to have delivered the file's
+contents, so it neither provides evidence of repeated successful work nor makes
+later successful work redundant; it is ignored entirely. Failure establishes the
+outcome of the call and not what payload it returned, which is why the rule is
+stated as what the record does not establish rather than as what the read
+returned. Re-running a command after it failed is a retry, not redundancy, and
+retry analysis is deliberately a later milestone.
 
 Failed writes and edits are treated as barriers anyway. A failed edit may still
 have applied in part, and suppressing a finding costs less than inventing one.

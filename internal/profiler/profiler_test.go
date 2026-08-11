@@ -64,6 +64,13 @@ type option func(*event.ToolCall)
 func failed(t *event.ToolCall)  { t.Outcome = event.OutcomeFailure }
 func untimed(t *event.ToolCall) { t.DurationMS = nil }
 
+// unestablished gives a call an outcome that says nothing about what became of
+// it: nothing validates the field on the way into or out of the log, so a record
+// can carry no outcome or one a later model added.
+func unestablished(state string) option {
+	return func(t *event.ToolCall) { t.Outcome = event.Outcome(state) }
+}
+
 // failing marks a call as failed with the failure the agent reported for it.
 func failing(digest string) option {
 	return func(t *event.ToolCall) {
@@ -418,6 +425,36 @@ func TestRepeatedReadFinding(t *testing.T) {
 	}
 	if f.ObservedTotal == nil || *f.ObservedTotal != 4*time.Millisecond {
 		t.Errorf("ObservedTotal = %v, want 4ms", f.ObservedTotal)
+	}
+}
+
+// A read is counted only where it was observed returning something. A read that
+// failed and a read whose outcome was never established are both unusable as
+// evidence of what the agent had, and neither is a change to the file, so the
+// reads around them still form one run.
+func TestOnlyAnObservedReadCounts(t *testing.T) {
+	t.Parallel()
+
+	for name, unusable := range map[string]option{
+		"a read that failed":                     failed,
+		"a read with no outcome":                 unestablished(""),
+		"a read with an outcome Axiom knows not": unestablished("blocked"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			report := analyze(newStream("a").
+				read("/src/main.go").
+				read("/src/main.go", unusable).
+				read("/src/main.go"))
+
+			if len(report.Findings) != 1 {
+				t.Fatalf("got %d findings, want 1:\n%+v", len(report.Findings), report.Findings)
+			}
+			if got := report.Findings[0].Occurrences; got != 2 {
+				t.Errorf("Occurrences = %d, want 2: only the reads observed returning something count", got)
+			}
+		})
 	}
 }
 

@@ -1,6 +1,7 @@
 package profiler_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -292,6 +293,147 @@ func TestLaterSuccessIsNotAssumed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Outcomes a record can carry that say nothing about what became of the call.
+// Nothing validates the field on the way into or out of the log, and "SUCCESS"
+// is there because the value is compared exactly: a near miss is still unknown.
+var unestablishedOutcomes = []string{"", "blocked", "timeout", "SUCCESS"}
+
+// An outcome that was never established is not evidence of failure, so it cannot
+// start a sequence of failed attempts no matter how often it repeats.
+func TestAnUnestablishedOutcomeCannotStartASequenceOfFailures(t *testing.T) {
+	t.Parallel()
+
+	// The outcome is the claim that a call failed. Failure detail beside an
+	// outcome that was never established does not make the claim: a record can
+	// hold one field and not the other, and reading the detail as the outcome
+	// would establish failure from something that is not it.
+	shapes := map[string][]option{
+		"with no failure detail":               {},
+		"with failure detail beside it":        {failing("x")},
+		"with an exit code beside it":          {exiting(1)},
+		"with an interrupt reported beside it": {interrupted},
+	}
+
+	for _, state := range unestablishedOutcomes {
+		for shape, detail := range shapes {
+			t.Run(fmt.Sprintf("outcome %q %s", state, shape), func(t *testing.T) {
+				t.Parallel()
+
+				// The unestablished outcome is applied last so that it is what
+				// the record ends up carrying.
+				opts := append(append([]option{}, detail...), unestablished(state))
+				report := analyze(newStream("a").inTurn("t1").
+					shell("go-test", opts...).
+					shell("go-test", opts...).
+					shell("go-test", opts...))
+
+				if len(report.Findings) != 0 {
+					t.Errorf("got %d findings, want none: no attempt was observed failing:\n%+v",
+						len(report.Findings), report.Findings)
+				}
+			})
+		}
+	}
+}
+
+// It cannot join one either. A sequence covers the attempts the agent reported
+// failing, and a call whose result is unknown ends it rather than counting in it.
+func TestAnUnestablishedOutcomeCannotJoinASequenceOfFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range unestablishedOutcomes {
+		t.Run(fmt.Sprintf("outcome %q", state), func(t *testing.T) {
+			t.Parallel()
+
+			f := only(t, analyze(newStream("a").inTurn("t1").
+				shell("go-test", failing("x"), exiting(1)).
+				shell("go-test", failing("x"), exiting(1)).
+				shell("go-test", unestablished(state)).
+				shell("go-test", failing("x"), exiting(1))))
+
+			if f.Kind != profiler.KindRepeatedFailure {
+				t.Fatalf("Kind = %q", f.Kind)
+			}
+			if f.Occurrences != 2 || f.Redundant != 1 {
+				t.Errorf("Occurrences = %d, Redundant = %d, want 2 and 1: only the attempts observed failing count",
+					f.Occurrences, f.Redundant)
+			}
+			// The unknown outcome closed the sequence. Closing it is not the
+			// same as observing the command get past the failure.
+			if f.LaterSuccess {
+				t.Error("LaterSuccess = true, but no success of that command was observed")
+			}
+		})
+	}
+}
+
+// Nor may it be read as a success. Treating it as one would credit the command
+// with an execution it cannot be shown to have completed.
+func TestAnUnestablishedOutcomeIsNotASuccessEither(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range unestablishedOutcomes {
+		t.Run(fmt.Sprintf("outcome %q", state), func(t *testing.T) {
+			t.Parallel()
+
+			report := analyze(newStream("a").inTurn("t1").
+				shell("go-test").
+				shell("go-test", unestablished(state)).
+				shell("go-test"))
+
+			if len(report.Findings) != 0 {
+				t.Errorf("got %d findings, want none: one of the three executions was never established:\n%+v",
+					len(report.Findings), report.Findings)
+			}
+		})
+	}
+}
+
+// The positive controls: an established outcome still decides everything it did
+// before, so the fix above cannot have been made by silencing the analysis.
+func TestEstablishedOutcomesStillDecideTheFinding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failure", func(t *testing.T) {
+		t.Parallel()
+
+		f := only(t, analyze(newStream("a").inTurn("t1").
+			shell("go-test", failing("x"), exiting(1)).
+			shell("go-test", failing("x"), exiting(1)).
+			shell("go-test", failing("x"), exiting(1))))
+
+		if f.Kind != profiler.KindRepeatedFailure || f.Occurrences != 3 {
+			t.Errorf("Kind = %q with %d occurrences, want a repeated failure of 3", f.Kind, f.Occurrences)
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+
+		f := only(t, analyze(newStream("a").inTurn("t1").
+			shell("go-test").
+			shell("go-test").
+			shell("go-test")))
+
+		if f.Kind != profiler.KindRepeatedShell || f.Occurrences != 3 {
+			t.Errorf("Kind = %q with %d occurrences, want a repeated shell operation of 3", f.Kind, f.Occurrences)
+		}
+	})
+
+	t.Run("a success after failures is still observed", func(t *testing.T) {
+		t.Parallel()
+
+		f := only(t, analyze(newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).
+			shell("go-test", failing("x")).
+			shell("go-test")))
+
+		if !f.LaterSuccess {
+			t.Error("LaterSuccess = false, but the command was observed succeeding afterwards")
+		}
+	})
 }
 
 // A sum missing part of itself would understate the time without saying so.
