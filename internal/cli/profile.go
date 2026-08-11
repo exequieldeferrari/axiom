@@ -103,9 +103,13 @@ const (
 	countLabelWidth = 20
 	// Wide enough to leave a gap after the longest detail label.
 	detailLabelWidth = 34
+	// Wide enough for the longest confidence level.
+	confidenceWidth  = 6
 	headlineWidth    = 42
 	digestDisplayLen = 12
-	findingIndent    = "        "
+	// Indented to the column a headline starts in: two spaces, the
+	// confidence, and the space after it.
+	findingIndent = "         "
 	// Associated consumption is indented under its own heading, and its
 	// labels are narrowed to match so the values stay in one column.
 	associatedIndent     = findingIndent + "  "
@@ -116,7 +120,8 @@ const (
 	scopeExplanation  = "Analysis is scoped to a single session and subagent: work repeated in a\nlater session is not counted, because the agent's context may legitimately\nhave been lost in between.\n"
 	observedCaveat    = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
 	measuredCaveat    = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
-	noFindingsMessage = "  No high-confidence redundant work detected.\n"
+	failureCaveat     = "A repeated failed attempt is one shell command tried again after it failed,\nwithin a single turn, with nothing in between that Axiom can see changing\nstate. The same observed failure means the agent reported the failures\nidentically, not that they had the same cause. Where a later attempt was\nobserved succeeding it is reported as that and nothing more: what came\nbetween is not evidence of what made the difference.\n"
+	noFindingsMessage = "  No high-confidence redundant work or repeated failed attempts detected.\n"
 )
 
 func writeReport(w io.Writer, r profiler.Report, findings []correlate.Measured, stats store.ScanStats, usage usageLog) {
@@ -142,26 +147,30 @@ func writeReport(w io.Writer, r profiler.Report, findings []correlate.Measured, 
 			usage.unreadable)
 	}
 
-	fmt.Fprint(w, "\nRedundant work\n\n")
+	fmt.Fprint(w, "\nFindings\n\n")
 	if len(findings) == 0 {
 		fmt.Fprint(w, noFindingsMessage)
 		fmt.Fprint(w, "\n"+scopeExplanation)
 		return
 	}
 
-	measured := false
+	measured, failures := false, false
 	for _, f := range findings {
 		writeFinding(w, f)
 		measured = measured || f.RedundantBytes != nil
+		failures = failures || f.Kind == profiler.KindRepeatedFailure
 	}
 	fmt.Fprintf(w, "%s.\n\n%s", plural(len(findings), "finding"), observedCaveat)
 	if measured {
 		fmt.Fprint(w, "\n"+measuredCaveat)
 	}
+	if failures {
+		fmt.Fprint(w, "\n"+failureCaveat)
+	}
 }
 
 func writeFinding(w io.Writer, f correlate.Measured) {
-	fmt.Fprintf(w, "  %-5s %-*s %s\n",
+	fmt.Fprintf(w, "  %-*s %-*s %s\n", confidenceWidth,
 		strings.ToUpper(string(f.Confidence)), headlineWidth, headline(f.Kind), attribution(f.Finding))
 	fmt.Fprintf(w, "%s%s\n", findingIndent, evidence(f.Finding))
 
@@ -170,11 +179,24 @@ func writeFinding(w io.Writer, f correlate.Measured) {
 		detail(w, "Potentially redundant reads", strconv.Itoa(f.Redundant))
 	case profiler.KindRepeatedShell:
 		detail(w, "Potentially redundant executions", strconv.Itoa(f.Redundant))
+	case profiler.KindRepeatedFailure:
+		detail(w, "Failed attempts", strconv.Itoa(f.Occurrences))
+		detail(w, "Repeated after a failure", strconv.Itoa(f.Redundant))
+		// An exit status the attempts disagreed on is left out rather than
+		// summarized: the finding would be naming a status that no longer
+		// describes every attempt under it.
+		if f.ExitCode != nil {
+			detail(w, "Same exit code", strconv.Itoa(*f.ExitCode))
+		}
 	}
 	// Shown only when every repeated call was measured exactly once. An
 	// absent line means the total is unknown, which is the usual case: it is
 	// not a measurement of zero.
-	if f.RedundantBytes != nil {
+	//
+	// A failed call is never measured this way. The agent reports no size for
+	// one, and labelling anything here as redundant output would describe a
+	// failed attempt as work that produced something.
+	if f.RedundantBytes != nil && f.Kind != profiler.KindRepeatedFailure {
 		detail(w, "Redundant tool output", size(f.RedundantBytes))
 	}
 	detail(w, "Repeated-call tool time", observedTime(f.Finding))
@@ -184,6 +206,17 @@ func writeFinding(w io.Writer, f correlate.Measured) {
 		detail(w, "File", f.Path)
 	case profiler.KindRepeatedShell:
 		detail(w, "Command digest", shortDigest(f.CommandDigest))
+	case profiler.KindRepeatedFailure:
+		detail(w, "Command digest", shortDigest(f.CommandDigest))
+		if f.FailureDigest != "" {
+			detail(w, "Failure digest", shortDigest(f.FailureDigest))
+		}
+		// Reported only where it was observed. Nothing is printed otherwise,
+		// because a command that was never tried again tells Axiom nothing
+		// about whether the agent got past it.
+		if f.LaterSuccess {
+			detail(w, "Same command later succeeded", "yes")
+		}
 	}
 	detail(w, "Window", window(f.First, f.Last))
 	if f.Associated != nil {
@@ -265,6 +298,8 @@ func headline(k profiler.Kind) string {
 		return "Repeated file read"
 	case profiler.KindRepeatedShell:
 		return "Repeated shell operation"
+	case profiler.KindRepeatedFailure:
+		return "Repeated failed attempt"
 	default:
 		return string(k)
 	}
@@ -277,6 +312,16 @@ func evidence(f profiler.Finding) string {
 		return fmt.Sprintf("Read %d times, with no agent modification observed in between", f.Occurrences)
 	case profiler.KindRepeatedShell:
 		return fmt.Sprintf("Executed %d times, with only read-only operations in between", f.Occurrences)
+	case profiler.KindRepeatedFailure:
+		// The two levels differ in what is known about the failures, so they
+		// have to read differently. Medium covers attempts that reported
+		// different failures and attempts that reported none, which are
+		// different observations but the same position: identical reporting
+		// was not established. Neither wording says anything about a cause.
+		if f.Confidence == profiler.ConfidenceHigh {
+			return fmt.Sprintf("Failed %d times, each reporting the same observed failure", f.Occurrences)
+		}
+		return fmt.Sprintf("Failed %d times; identical failure reporting was not established", f.Occurrences)
 	default:
 		return fmt.Sprintf("Repeated %d times", f.Occurrences)
 	}

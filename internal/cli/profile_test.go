@@ -108,7 +108,7 @@ func TestProfileReportsCleanSession(t *testing.T) {
 		"Events              3",
 		"Sessions analyzed   2",
 		"Tool calls          3",
-		"No high-confidence redundant work detected.",
+		"No high-confidence redundant work or repeated failed attempts detected.",
 		"scoped to a single session",
 	} {
 		if !strings.Contains(out, want) {

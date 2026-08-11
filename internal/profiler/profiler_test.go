@@ -59,8 +59,34 @@ func (s *stream) add(ev event.Event) *stream {
 
 type option func(*event.ToolCall)
 
+// failed marks a call as failed with no detail at all, which is what an agent
+// that reports only an outcome produces.
 func failed(t *event.ToolCall)  { t.Outcome = event.OutcomeFailure }
 func untimed(t *event.ToolCall) { t.DurationMS = nil }
+
+// failing marks a call as failed with the failure the agent reported for it.
+func failing(digest string) option {
+	return func(t *event.ToolCall) {
+		t.Outcome = event.OutcomeFailure
+		t.Failure = &event.Failure{Kind: event.FailureKindError, Digest: digest}
+	}
+}
+
+// exiting adds the status a failed call exited with.
+func exiting(code int) option {
+	return func(t *event.ToolCall) {
+		if t.Failure == nil {
+			t.Failure = &event.Failure{Kind: event.FailureKindError}
+		}
+		t.Failure.ExitCode = &code
+	}
+}
+
+// interrupted marks a call a person stopped part way through.
+func interrupted(t *event.ToolCall) {
+	t.Outcome = event.OutcomeFailure
+	t.Failure = &event.Failure{Kind: event.FailureKindInterrupt}
+}
 
 func took(ms int64) option {
 	return func(t *event.ToolCall) { t.DurationMS = &ms }
@@ -238,6 +264,54 @@ func TestNoFindings(t *testing.T) {
 
 		"different commands": newStream("a").
 			shell("go-test").shell("go-vet").shell("go-build"),
+
+		// A repeated failed attempt is only a finding when nothing between
+		// the attempts could have made the next one worth trying.
+		"command attempted again after an edit": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).edit("/src/main.go").shell("go-test", failing("x")),
+
+		"command attempted again after another command": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).shell("go-vet").shell("go-test", failing("x")),
+
+		"command attempted again after another command failed": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).shell("go-vet", failing("y")).shell("go-test", failing("x")),
+
+		"command attempted again after an unrecognised tool": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).unrecognised("mcp__db__query").shell("go-test", failing("x")),
+
+		"command attempted again after a subagent ran": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).subagent("explore").shell("go-test", failing("x")),
+
+		"command attempted again after a background command": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).background("serve").shell("go-test", failing("x")),
+
+		"command attempted again after the context was reset": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).sessionStart("compact").shell("go-test", failing("x")),
+
+		// A person stopped the call, so what the agent does next answers
+		// them rather than repeating itself.
+		"command attempted again after an interrupt": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).shell("go-test", interrupted).shell("go-test", failing("x")),
+
+		"command interrupted twice": newStream("a").inTurn("t1").
+			shell("go-test", interrupted).shell("go-test", interrupted),
+
+		"command attempted again in a later turn": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).inTurn("t2").shell("go-test", failing("x")),
+
+		// Without a turn there is no boundary to respect, so the claim
+		// cannot be made at all.
+		"command attempted again with no turn identifier": newStream("a").
+			shell("go-test", failing("x")).shell("go-test", failing("x")),
+
+		"command attempted again in a later session": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).as("b").shell("go-test", failing("x")),
+
+		"command attempted again by a nested agent": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).inSubagent("sub-1").shell("go-test", failing("x")),
+
+		"command that failed once and then succeeded": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).shell("go-test"),
 	}
 
 	for name, s := range cases {
