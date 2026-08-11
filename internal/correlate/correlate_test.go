@@ -190,9 +190,10 @@ func TestMeasurementsFromAnotherContextDoNotMatch(t *testing.T) {
 	}
 }
 
-// Token and cost measurements describe a whole turn. Nothing identifies the
-// tool call they would have to be charged to.
-func TestModelRequestsAreNotIndexed(t *testing.T) {
+// Token and cost measurements are reported against a turn. Nothing identifies
+// the tool call they would have to be charged to, even when the record carries
+// an invocation identifier of its own.
+func TestModelRequestsAreNotMeasuredAsToolOutput(t *testing.T) {
 	t.Parallel()
 
 	f := repeatedRead("s1",

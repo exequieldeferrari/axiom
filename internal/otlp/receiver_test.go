@@ -64,8 +64,8 @@ func TestReceiverAcceptsARealExport(t *testing.T) {
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("content type = %q", ct)
 	}
-	if got.len() != 4 {
-		t.Errorf("sink received %d records, want 4", got.len())
+	if got.len() != 5 {
+		t.Errorf("sink received %d records, want 5", got.len())
 	}
 	if rc.Rejected() != 0 {
 		t.Errorf("Rejected = %d, want 0", rc.Rejected())
@@ -92,8 +92,8 @@ func TestReceiverAcceptsGzip(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
 	}
-	if got.len() != 4 {
-		t.Errorf("sink received %d records, want 4", got.len())
+	if got.len() != 5 {
+		t.Errorf("sink received %d records, want 5", got.len())
 	}
 }
 
@@ -344,7 +344,7 @@ func TestReceiverServesOverHTTP(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(body) != "{}" {
 		t.Errorf("status = %d, body = %q", resp.StatusCode, body)
 	}
-	if got.len() != 4 {
-		t.Errorf("sink received %d records, want 4", got.len())
+	if got.len() != 5 {
+		t.Errorf("sink received %d records, want 5", got.len())
 	}
 }

@@ -30,7 +30,9 @@ type Usage struct {
 	Timestamp     time.Time `json:"timestamp"`
 
 	SessionID string `json:"session_id"`
-	// TurnID groups everything the agent did for one user prompt.
+	// TurnID is the execution context the agent identified this record with,
+	// from its own turn or prompt identifier. Several model requests and tool
+	// calls may share one.
 	TurnID string `json:"turn_id,omitempty"`
 	// InvocationID identifies one tool call, matching the identifier the same
 	// agent reports to its hooks.

@@ -26,11 +26,38 @@ func realExport(t *testing.T) map[string]otlp.Record {
 	if err != nil {
 		t.Fatalf("DecodeLogs: %v", err)
 	}
+	// The fixture holds more than one request for the same turn, so the first
+	// record of each kind is kept and the rest are reached through
+	// realExportAll.
 	byName := make(map[string]otlp.Record, len(records))
 	for _, r := range records {
-		byName[r.Name] = r
+		if _, seen := byName[r.Name]; !seen {
+			byName[r.Name] = r
+		}
 	}
 	return byName
+}
+
+// realExportAll returns every captured record of one kind, in export order.
+func realExportAll(t *testing.T, name string) []otlp.Record {
+	t.Helper()
+
+	data, err := os.ReadFile("../otlp/testdata/claude_logs.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	records, err := otlp.DecodeLogs(data)
+	if err != nil {
+		t.Fatalf("DecodeLogs: %v", err)
+	}
+
+	var out []otlp.Record
+	for _, r := range records {
+		if r.Name == name {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func usage(t *testing.T, rec otlp.Record) event.Usage {
@@ -89,6 +116,28 @@ func TestModelRequestMapping(t *testing.T) {
 	// A model request has no tool identity to carry.
 	if u.InvocationID != "" || u.ToolName != "" || u.ResultBytes != nil {
 		t.Errorf("tool fields set on a model request: %+v", u)
+	}
+}
+
+// An agent reports each model request separately, and a captured turn carries
+// several of them. Anything reading a turn's consumption has to add them up
+// rather than expect one record.
+func TestOneTurnCarriesSeveralModelRequests(t *testing.T) {
+	t.Parallel()
+
+	records := realExportAll(t, "api_request")
+	if len(records) < 2 {
+		t.Fatalf("the fixture holds %d requests, so this test proves nothing", len(records))
+	}
+
+	turn := usage(t, records[0]).TurnID
+	if turn == "" {
+		t.Fatal("the captured request names no turn")
+	}
+	for _, r := range records[1:] {
+		if got := usage(t, r).TurnID; got != turn {
+			t.Errorf("TurnID = %q, want %q for every request in the turn", got, turn)
+		}
 	}
 }
 

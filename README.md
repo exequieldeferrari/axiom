@@ -44,9 +44,11 @@ What works today:
 - Local append-only logs, one per stream
 - A profiler that reports repeated shell commands and repeated file reads
 - Measured tool output for redundant calls, when a receiver recorded it
+- The consumption observed in the turns a finding happened in
 
-Not built yet: token and cost analysis, repeated-search detection, failure-loop
-detection, recommendations, and support for agents other than Claude Code.
+Not built yet: repeated-search detection, failure-loop detection,
+recommendations, and support for agents other than Claude Code. Axiom reports
+consumption it observed but does not attribute it, and makes no savings claims.
 
 ## How it works
 
@@ -88,6 +90,11 @@ They are joined only at the end, and only on identifiers both streams carry:
 the session, the turn, and the tool invocation. Behavior always comes from the
 event stream, so a measurement can add a number to a finding but can never
 create one.
+
+The join answers two different questions and keeps them apart. A tool result
+belongs to one invocation, so it is attributed to it. A model request belongs to
+a turn, which other calls and requests may share, so it is reported as what was
+going on around a finding and never as its cost.
 
 Everything below the canonical boundary is written against Axiom's own model,
 not against Claude Code. That is what makes a second agent an adapter rather
@@ -296,6 +303,66 @@ The line appears only when every repeated call was measured exactly once. When
 it is missing the total is unknown, which is the usual case: telemetry exists
 only for the time a receiver was running, and a measurement that is absent,
 duplicated, or sizeless is never treated as zero.
+
+### What the turn consumed
+
+A finding on its own does not say whether it happened somewhere expensive. When
+a receiver recorded the model requests behind a finding's turns, Axiom shows
+what they consumed:
+
+```console
+  HIGH  Repeated file read                         session 7b4d3ab1
+        Read 3 times, with no agent modification observed in between
+        Potentially redundant reads       2
+        Redundant tool output             15.0 KB
+        Repeated-call tool time           4ms
+        File                              /repo/internal/store/store.go
+        Window                            2026-08-10 20:25:04 → 20:25:09 UTC
+
+        Observed model consumption in the turn where this happened
+          Model requests                  2
+          Input tokens                    8
+          Output tokens                   401
+          Cache read                      117,147
+          Cache creation                  41,141
+          Model cost                      $0.2880
+          This is the observed model consumption
+          for that turn, not the cost of the repetition.
+```
+
+Read the two blocks differently. Everything above the heading is attributable
+to the repetition. Everything below it was observed in the turns where the
+repetition happened — a turn is the execution context the agent identifies, and
+other tool calls and model requests share it, so those totals cover them too.
+**Axiom does not know how much of it the repetition caused, and neither does
+anything in the recording.**
+
+That is also why nothing here is ever called wasted, saved, or avoidable, and
+why these figures cannot be added up across findings: two findings in the same
+turn each report all of that turn, not a share of it.
+
+The counts stay in the four dimensions the agent reports, with no synthetic
+total, and they are shown only when every observed request reported them. Cost
+is the agent's own estimate for those requests.
+
+Where a finding happened comes from the event stream; how much of it Axiom saw
+depends on the receiver. When the two differ, the report says so rather than
+describing a smaller finding:
+
+```console
+        Observed model consumption in 1 of the 3 turns where this happened
+          Model requests                  1
+          Input tokens                    2
+          Output tokens                   93
+          Cache read                      0
+          Cache creation                  35,419
+          Model cost                      $0.2139
+          This is the observed model consumption
+          for the turn it was recorded in, not the cost of the repetition.
+```
+
+The read still happened in three turns. Nothing is assumed about the two with
+no records, and nothing is shown as zero for them.
 
 ## Where the data goes
 
