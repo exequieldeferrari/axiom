@@ -14,8 +14,10 @@ import (
 )
 
 type initOptions struct {
-	global bool
-	dryRun bool
+	global    bool
+	dryRun    bool
+	telemetry bool
+	addr      string
 }
 
 // runInit installs Axiom's Claude Code hooks.
@@ -39,6 +41,8 @@ func parseInitFlags(args []string) (initOptions, error) {
 	var opts initOptions
 	flags.BoolVar(&opts.global, "global", false, "install for all projects in ~/.claude/settings.json")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "print the resulting settings without writing them")
+	flags.BoolVar(&opts.telemetry, "telemetry", false, "also export Claude Code's telemetry to a local axiom receiver")
+	flags.StringVar(&opts.addr, "addr", DefaultAddr, "receiver address to configure with --telemetry")
 
 	if err := flags.Parse(args); err != nil {
 		return opts, &UsageError{Msg: err.Error()}
@@ -55,11 +59,24 @@ func runInstall(opts initOptions, exePath string, stdout io.Writer) error {
 		return err
 	}
 
-	res, err := claude.InstallFile(settings, exePath, opts.dryRun)
+	endpoint := ""
+	if opts.telemetry {
+		endpoint = claude.TelemetryEndpoint(opts.addr)
+	}
+
+	res, err := claude.InstallFile(settings, claude.InstallOptions{
+		ExePath:           exePath,
+		TelemetryEndpoint: endpoint,
+		DryRun:            opts.dryRun,
+	})
 	if err != nil {
 		var conflict *claude.ConflictError
 		if errors.As(err, &conflict) {
 			return fmt.Errorf("%w\n%s was not modified; remove the existing hook to reinstall", conflict, settings)
+		}
+		var telemetry *claude.TelemetryConflictError
+		if errors.As(err, &telemetry) {
+			return fmt.Errorf("%w\n%s was not modified; remove the existing variable to let axiom configure telemetry", telemetry, settings)
 		}
 		return err
 	}
@@ -68,15 +85,22 @@ func runInstall(opts initOptions, exePath string, stdout io.Writer) error {
 	case opts.dryRun:
 		fmt.Fprintf(stdout, "Would write %s\n", settings)
 		fmt.Fprintf(stdout, "Hook command: %s hook claude\n", exePath)
-		fmt.Fprintf(stdout, "Events: %s\n\n", strings.Join(claude.HookEvents, ", "))
-		fmt.Fprintf(stdout, "%s", res.Content)
+		fmt.Fprintf(stdout, "Events: %s\n", strings.Join(claude.HookEvents, ", "))
+		if opts.telemetry {
+			fmt.Fprintf(stdout, "Telemetry:\n%s", claude.TelemetrySummary(endpoint))
+		}
+		fmt.Fprintf(stdout, "\n%s", res.Content)
 	case !res.Changed:
-		fmt.Fprintf(stdout, "Axiom hooks are already installed in %s\n", settings)
+		fmt.Fprintf(stdout, "Axiom is already installed in %s\n", settings)
 	default:
 		fmt.Fprintf(stdout, "Installed Axiom hooks in %s\n", settings)
 		fmt.Fprintf(stdout, "Events: %s\n", strings.Join(claude.HookEvents, ", "))
 		if dir, err := store.DefaultDir(); err == nil {
-			fmt.Fprintf(stdout, "Recording to %s\n", filepath.Join(dir, store.FileName))
+			fmt.Fprintf(stdout, "Recording to %s\n", filepath.Join(dir, store.EventsFile))
+		}
+		if opts.telemetry {
+			fmt.Fprintf(stdout, "\nClaude Code will export telemetry to %s\n", endpoint)
+			fmt.Fprint(stdout, "Run 'axiom observe' while you work to record it.\n")
 		}
 		if !opts.global {
 			fmt.Fprint(stdout, "\nNote: Claude Code only adds .claude/settings.local.json to your git excludes\n"+

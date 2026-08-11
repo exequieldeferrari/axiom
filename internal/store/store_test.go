@@ -49,7 +49,7 @@ func TestAppendCreatesOneLinePerEvent(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	s, err := store.Open(dir)
+	s, err := store.OpenEvents(dir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAppendAcrossReopen(t *testing.T) {
 
 	dir := t.TempDir()
 	for _, id := range []string{"first", "second"} {
-		s, err := store.Open(dir)
+		s, err := store.OpenEvents(dir)
 		if err != nil {
 			t.Fatalf("open store: %v", err)
 		}
@@ -91,7 +91,7 @@ func TestAppendAcrossReopen(t *testing.T) {
 		}
 	}
 
-	lines := readLines(t, filepath.Join(dir, store.FileName))
+	lines := readLines(t, filepath.Join(dir, store.EventsFile))
 	if len(lines) != 2 {
 		t.Fatalf("got %d lines, want 2", len(lines))
 	}
@@ -104,7 +104,7 @@ func TestRejectedEventLeavesPriorRecordsIntact(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	s, err := store.Open(dir)
+	s, err := store.OpenEvents(dir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestEventLogIsPrivate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	s, err := store.Open(dir)
+	s, err := store.OpenEvents(dir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestConcurrentAppends(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	s, err := store.Open(dir)
+	s, err := store.OpenEvents(dir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

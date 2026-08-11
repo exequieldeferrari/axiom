@@ -48,6 +48,9 @@ type Event struct {
 	Tool    *ToolCall `json:"tool,omitempty"`
 }
 
+// Version reports the schema this record was written under.
+func (e Event) Version() int { return e.SchemaVersion }
+
 // Session carries lifecycle detail for session_start and session_end events.
 //
 // A session_end event is not guaranteed to exist: agents may be killed, and

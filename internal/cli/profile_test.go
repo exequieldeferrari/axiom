@@ -17,7 +17,7 @@ func seed(t *testing.T, events ...event.Event) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	s, err := store.Open(dir)
+	s, err := store.OpenEvents(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestProfileSurfacesSkippedRecords(t *testing.T) {
 	t.Parallel()
 
 	dir := seed(t, readEvent("session-1", "/repo/a.go", at(0), 4))
-	path := filepath.Join(dir, store.FileName)
+	path := filepath.Join(dir, store.EventsFile)
 
 	log, err := os.ReadFile(path)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestProfileDoesNotModifyTheLog(t *testing.T) {
 		readEvent("session-1", "/repo/a.go", at(0), 4),
 		readEvent("session-1", "/repo/a.go", at(time.Second), 4),
 	)
-	path := filepath.Join(dir, store.FileName)
+	path := filepath.Join(dir, store.EventsFile)
 
 	before, err := os.ReadFile(path)
 	if err != nil {

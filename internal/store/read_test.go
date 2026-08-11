@@ -23,10 +23,10 @@ func record(session string) string {
 func scanAll(t *testing.T, log string) ([]event.Event, store.ScanStats) {
 	t.Helper()
 
-	s := store.NewScanner(strings.NewReader(log))
+	s := store.NewScanner[event.Event](strings.NewReader(log))
 	var got []event.Event
 	for s.Scan() {
-		got = append(got, s.Event())
+		got = append(got, s.Record())
 	}
 	if err := s.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
@@ -175,7 +175,7 @@ func TestScanReadsBackAppendedEvents(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	s, err := store.Open(dir)
+	s, err := store.OpenEvents(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestScanReadsBackAppendedEvents(t *testing.T) {
 		}
 	}
 
-	scanner, err := store.Scan(dir)
+	scanner, err := store.ScanEvents(dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestScanReadsBackAppendedEvents(t *testing.T) {
 
 	var got []string
 	for scanner.Scan() {
-		got = append(got, scanner.Event().SessionID)
+		got = append(got, scanner.Record().SessionID)
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
@@ -206,7 +206,7 @@ func TestScanReadsBackAppendedEvents(t *testing.T) {
 func TestScanReportsMissingLog(t *testing.T) {
 	t.Parallel()
 
-	_, err := store.Scan(t.TempDir())
+	_, err := store.ScanEvents(t.TempDir())
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("error = %v, want it to wrap fs.ErrNotExist", err)
 	}
@@ -217,7 +217,7 @@ func TestScanDoesNotCreateAnything(t *testing.T) {
 	t.Parallel()
 
 	dir := filepath.Join(t.TempDir(), "missing")
-	if _, err := store.Scan(dir); err == nil {
+	if _, err := store.ScanEvents(dir); err == nil {
 		t.Fatal("Scan succeeded on a missing directory")
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {

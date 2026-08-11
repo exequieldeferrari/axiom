@@ -45,7 +45,7 @@ func runClaudeHook(stdin io.Reader, dataDir string, now time.Time) error {
 		return nil
 	}
 
-	s, err := store.Open(dataDir)
+	s, err := store.OpenEvents(dataDir)
 	if err != nil {
 		return nil
 	}

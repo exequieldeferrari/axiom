@@ -232,7 +232,7 @@ func TestConflictLeavesFileUntouched(t *testing.T) {
 		t.Fatalf("seed settings: %v", err)
 	}
 
-	if _, err := claude.InstallFile(path, exe, false); err == nil {
+	if _, err := claude.InstallFile(path, claude.InstallOptions{ExePath: exe}); err == nil {
 		t.Fatal("InstallFile succeeded, want a conflict")
 	}
 
@@ -274,7 +274,7 @@ func TestInstallFilePreservesFileMode(t *testing.T) {
 		t.Fatalf("seed settings: %v", err)
 	}
 
-	if _, err := claude.InstallFile(path, exe, false); err != nil {
+	if _, err := claude.InstallFile(path, claude.InstallOptions{ExePath: exe}); err != nil {
 		t.Fatalf("InstallFile: %v", err)
 	}
 
@@ -307,7 +307,7 @@ func TestInstallFileWritesThroughSymlink(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	if _, err := claude.InstallFile(link, exe, false); err != nil {
+	if _, err := claude.InstallFile(link, claude.InstallOptions{ExePath: exe}); err != nil {
 		t.Fatalf("InstallFile: %v", err)
 	}
 
@@ -334,7 +334,7 @@ func TestInstallFileCreatesMissingSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".claude", "settings.local.json")
 
-	res, err := claude.InstallFile(path, exe, false)
+	res, err := claude.InstallFile(path, claude.InstallOptions{ExePath: exe})
 	if err != nil {
 		t.Fatalf("InstallFile: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestInstallFileDryRunWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
-	res, err := claude.InstallFile(path, exe, true)
+	res, err := claude.InstallFile(path, claude.InstallOptions{ExePath: exe, DryRun: true})
 	if err != nil {
 		t.Fatalf("InstallFile: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestInstallFileIdempotentOnDisk(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
-	if _, err := claude.InstallFile(path, exe, false); err != nil {
+	if _, err := claude.InstallFile(path, claude.InstallOptions{ExePath: exe}); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 	first, err := os.ReadFile(path)
@@ -394,7 +394,7 @@ func TestInstallFileIdempotentOnDisk(t *testing.T) {
 		t.Fatalf("read settings: %v", err)
 	}
 
-	res, err := claude.InstallFile(path, exe, false)
+	res, err := claude.InstallFile(path, claude.InstallOptions{ExePath: exe})
 	if err != nil {
 		t.Fatalf("second install: %v", err)
 	}

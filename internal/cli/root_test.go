@@ -27,6 +27,7 @@ func TestRun_NoArgs_PrintsHelp(t *testing.T) {
 		"Usage:",
 		"axiom <command>",
 		"init",
+		"observe",
 		"profile",
 		"hook",
 		"help",
@@ -68,6 +69,28 @@ func TestRun_HelpFlags(t *testing.T) {
 		if !strings.Contains(stdout.String(), "Usage:") {
 			t.Fatalf("Run(%v) missing help output:\n%s", args, stdout.String())
 		}
+	}
+}
+
+// observe is dispatched like any other command, and a bad flag is reported
+// without dumping the root help over it.
+func TestRun_Observe_ReportsUsageErrors(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Run([]string{"axiom", "observe", "--nope"}, &stdout, &stderr)
+
+	if !cli.IsUsage(err) {
+		t.Fatalf("err = %v, want a usage error", err)
+	}
+	if !strings.Contains(stderr.String(), "nope") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Usage:") {
+		t.Errorf("a flag mistake printed the root help:\n%s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
 	}
 }
 
