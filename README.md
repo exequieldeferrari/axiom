@@ -33,8 +33,8 @@ and recommend second.
 
 ## Status
 
-Early. Axiom **records** agent activity and reports **redundant work** it can
-prove from that record.
+Early. Axiom **records** agent activity and reports the **repeated work** and
+**repeated failed attempts** it can prove from that record.
 
 What works today:
 
@@ -43,12 +43,13 @@ What works today:
 - An agent-neutral event model
 - Local append-only logs, one per stream
 - A profiler that reports repeated shell commands and repeated file reads
+- Repeated failed attempts at the same shell command
 - Measured tool output for redundant calls, when a receiver recorded it
 - The consumption observed in the turns a finding happened in
 
-Not built yet: repeated-search detection, failure-loop detection,
-recommendations, and support for agents other than Claude Code. Axiom reports
-consumption it observed but does not attribute it, and makes no savings claims.
+Not built yet: repeated-search detection, recommendations, and support for
+agents other than Claude Code. Axiom reports consumption it observed but does
+not attribute it, and makes no savings claims.
 
 ## How it works
 
@@ -68,15 +69,17 @@ flowchart TD
 
     EventLog --> Profiler["Profiler"]
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
-    Profiler --> Loops["Failure loops"]
+    Profiler --> Failures["Repeated failed attempts"]
+    Profiler --> Churn["Context churn"]
     Redundant --> Correlate["Correlation<br/>session · turn · invocation"]
+    Failures --> Correlate
     UsageLog --> Correlate
     Correlate --> CLI["axiom profile"]
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Profiler,Redundant,Correlate,CLI built
-    class Future,Loops planned
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Profiler,Redundant,Failures,Correlate,CLI built
+    class Future,Churn planned
 ```
 
 Solid boxes exist today; dashed boxes and dashed arrows are roadmap.
@@ -223,8 +226,8 @@ telemetry is dropped and your session is unaffected.
 
 ## Profiling
 
-`axiom profile` analyzes the recorded events and reports repeated work. It only
-ever reads the log.
+`axiom profile` analyzes the recorded events and reports what it can prove from
+them. It only ever reads the log.
 
 ```console
 $ axiom profile
@@ -235,21 +238,21 @@ Events              29
 Sessions analyzed   2
 Tool calls          25
 
-Redundant work
+Findings
 
-  No high-confidence redundant work detected.
+  No high-confidence redundant work or repeated failed attempts detected.
 ```
 
 A quiet report is a real result. Axiom would rather miss redundant work than
 invent it, so it only reports repetition it can justify:
 
 ```console
-  HIGH  Repeated shell operation                   session 7b4d3ab1
-        Executed 3 times, with only read-only operations in between
-        Potentially redundant executions  2
-        Repeated-call tool time           640ms
-        Command digest                    3f1c0a9e77b4…
-        Window                            2026-08-10 20:25:04 → 20:29:11 UTC
+  HIGH   Repeated shell operation                   session 7b4d3ab1
+         Executed 3 times, with only read-only operations in between
+         Potentially redundant executions  2
+         Repeated-call tool time           640ms
+         Command digest                    3f1c0a9e77b4…
+         Window                            2026-08-10 20:25:04 → 20:29:11 UTC
 ```
 
 ### What Axiom will and will not call redundant
@@ -271,7 +274,7 @@ command such as `gofmt -w`, an MCP tool, or your own editor can modify a file
 without Axiom knowing, which is precisely why anything opaque ends the sequence.
 
 Retries do not count as redundancy: a command re-run after failing is a retry,
-and failure-loop analysis is a separate concern Axiom does not tackle yet.
+and it is [reported as its own kind of finding](#repeated-failed-attempts).
 
 `Repeated-call tool time` is how long the repeated calls took to execute, not
 counting the first. It is not the total time of the operation, and it measures
@@ -285,13 +288,13 @@ If a receiver was running (see [Recording usage](#recording-usage)), findings
 also report what the repeated calls actually returned:
 
 ```console
-  HIGH  Repeated file read                         session 7b4d3ab1
-        Read 3 times, with no agent modification observed in between
-        Potentially redundant reads       2
-        Redundant tool output             15.0 KB
-        Repeated-call tool time           4ms
-        File                              /repo/internal/store/store.go
-        Window                            2026-08-10 20:25:04 → 20:25:09 UTC
+  HIGH   Repeated file read                         session 7b4d3ab1
+         Read 3 times, with no agent modification observed in between
+         Potentially redundant reads       2
+         Redundant tool output             15.0 KB
+         Repeated-call tool time           4ms
+         File                              /repo/internal/store/store.go
+         Window                            2026-08-10 20:25:04 → 20:25:09 UTC
 ```
 
 The size is measured, never estimated. Axiom joins the two streams on the
@@ -304,6 +307,56 @@ it is missing the total is unknown, which is the usual case: telemetry exists
 only for the time a receiver was running, and a measurement that is absent,
 duplicated, or sizeless is never treated as zero.
 
+### Repeated failed attempts
+
+Re-running a command that just failed is a different behavior from redundancy,
+and Axiom reports it separately: the same shell command attempted again, within
+one turn, with nothing in between that Axiom can see changing state.
+
+```console
+  HIGH   Repeated failed attempt                    session 9f2c1d3e
+         Failed 3 times, each reporting the same observed failure
+         Failed attempts                   3
+         Repeated after a failure          2
+         Same exit code                    3
+         Repeated-call tool time           1.061s
+         Command digest                    c10ec4b070ab…
+         Failure digest                    30303e9585c1…
+         Window                            2026-08-11 14:46:01 → 14:46:06 UTC
+```
+
+The two confidence levels say how much is known about the failures themselves,
+not how bad the behavior looks. **HIGH** means every attempt reported an
+identical failure. **MEDIUM** means Axiom could not establish that: the
+attempts reported different failures, or at least one reported none. Real
+commands print elapsed times and changing line numbers, so identical failures
+are the exception rather than the rule.
+
+Identical failures mean the agent described them the same way. They do not mean
+the attempts failed for the same reason — the error text is never recorded, and
+nothing in a digest establishes a cause.
+
+The sequence is confined to a single turn, unlike the redundancy findings. A
+turn boundary is where input Axiom never saw may have arrived, and an attempt
+made because someone asked for it again is not the agent repeating itself.
+Anything that could have changed the world ends the sequence too: an edit, a
+different command, an unrecognized tool, a background command, a context reset,
+or an interrupted call, which a person stopped.
+
+Where the same command is later observed succeeding, the report says so:
+
+```console
+         Same command later succeeded      yes
+```
+
+That is an observation about a later attempt and nothing else. What happened in
+between is not evidence of what made the difference, so nothing here is called
+a recovery or a fix. The line's absence means only that Axiom never saw that
+command succeed — never that the agent failed to get past it.
+
+Failed attempts are not measured in bytes. Agents report no result size for a
+call that failed, so there is nothing to measure and nothing is estimated.
+
 ### What the turn consumed
 
 A finding on its own does not say whether it happened somewhere expensive. When
@@ -311,23 +364,23 @@ a receiver recorded the model requests behind a finding's turns, Axiom shows
 what they consumed:
 
 ```console
-  HIGH  Repeated file read                         session 7b4d3ab1
-        Read 3 times, with no agent modification observed in between
-        Potentially redundant reads       2
-        Redundant tool output             15.0 KB
-        Repeated-call tool time           4ms
-        File                              /repo/internal/store/store.go
-        Window                            2026-08-10 20:25:04 → 20:25:09 UTC
+  HIGH   Repeated file read                         session 7b4d3ab1
+         Read 3 times, with no agent modification observed in between
+         Potentially redundant reads       2
+         Redundant tool output             15.0 KB
+         Repeated-call tool time           4ms
+         File                              /repo/internal/store/store.go
+         Window                            2026-08-10 20:25:04 → 20:25:09 UTC
 
-        Observed model consumption in the turn where this happened
-          Model requests                  2
-          Input tokens                    8
-          Output tokens                   401
-          Cache read                      117,147
-          Cache creation                  41,141
-          Model cost                      $0.2880
-          This is the observed model consumption
-          for that turn, not the cost of the repetition.
+         Observed model consumption in the turn where this happened
+           Model requests                  2
+           Input tokens                    8
+           Output tokens                   401
+           Cache read                      117,147
+           Cache creation                  41,141
+           Model cost                      $0.2880
+           This is the observed model consumption
+           for that turn, not the cost of the repetition.
 ```
 
 Read the two blocks differently. Everything above the heading is attributable
@@ -350,15 +403,15 @@ depends on the receiver. When the two differ, the report says so rather than
 describing a smaller finding:
 
 ```console
-        Observed model consumption in 1 of the 3 turns where this happened
-          Model requests                  1
-          Input tokens                    2
-          Output tokens                   93
-          Cache read                      0
-          Cache creation                  35,419
-          Model cost                      $0.2139
-          This is the observed model consumption
-          for the turn it was recorded in, not the cost of the repetition.
+         Observed model consumption in 1 of the 3 turns where this happened
+           Model requests                  1
+           Input tokens                    2
+           Output tokens                   93
+           Cache read                      0
+           Cache creation                  35,419
+           Model cost                      $0.2139
+           This is the observed model consumption
+           for the turn it was recorded in, not the cost of the repetition.
 ```
 
 The read still happened in three turns. Nothing is assumed about the two with
@@ -477,6 +530,9 @@ read:
 - **Blocked and denied tool calls are invisible.** Axiom observes only calls
   that ran. `PreToolUse` is deliberately not used, so tool call counts are a
   lower bound.
+- **Only failures the agent reported are seen.** A call that never ran cannot
+  fail visibly, so "no failures" means none were recorded, not that nothing
+  went wrong.
 - **Sessions may have no end.** If the agent is killed, no `SessionEnd` arrives.
 - **A session is not a unit of work.** Claude Code starts a new session on
   `/clear` and after compaction, so one sitting can span several session IDs.
@@ -486,8 +542,9 @@ read:
   processes, so two tool calls that overlapped may be recorded in either order.
 - **Usage is only recorded while `axiom observe` runs.** The usage log is
   necessarily partial, and no usage record means unknown, not zero.
-- **Behavior and usage are not yet connected.** Axiom records both streams and
-  keeps the identifiers needed to join them, but does not join them today.
+- **Usage adds to findings but never creates them.** The two streams are joined
+  on identifiers both carry, so a measurement can put a number on behavior the
+  event log already proved, and nothing else.
 
 ## Non-interference
 
