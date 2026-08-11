@@ -46,6 +46,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return reportUsage(stderr, runInit(args[2:], stdout))
 	case "hook":
 		return reportUsage(stderr, runHook(args[2:]))
+	case "observe":
+		return reportUsage(stderr, runObserve(args[2:], stdout))
 	case "profile":
 		return reportUsage(stderr, runProfile(args[2:], stdout))
 	default:
@@ -73,6 +75,7 @@ Usage:
 
 Commands:
   init        Install the Claude Code integration
+  observe     Record agent telemetry while you work
   profile     Analyze recorded events and report redundant work
   hook        Record an agent event (invoked by agent hooks, not by hand)
   help        Show this help message

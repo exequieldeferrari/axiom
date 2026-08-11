@@ -27,7 +27,7 @@ func runProfile(args []string, stdout io.Writer) error {
 }
 
 func profileLog(dir string, stdout io.Writer) error {
-	scanner, err := store.Scan(dir)
+	scanner, err := store.ScanEvents(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprint(stdout, "No events recorded yet.\nRun 'axiom init', then use Claude Code.\n")
 		return nil
@@ -39,7 +39,7 @@ func profileLog(dir string, stdout io.Writer) error {
 
 	p := profiler.New()
 	for scanner.Scan() {
-		p.Add(scanner.Event())
+		p.Add(scanner.Record())
 	}
 	if err := scanner.Err(); err != nil {
 		return err

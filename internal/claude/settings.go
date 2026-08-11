@@ -117,19 +117,42 @@ func Install(data []byte, exePath string) (Result, error) {
 	return Result{Changed: changed, Content: content}, nil
 }
 
-// InstallFile applies Install to a settings file on disk. With dryRun set,
+// InstallOptions selects what an install writes.
+type InstallOptions struct {
+	// ExePath is the binary Claude Code should run for hook events.
+	ExePath string
+	// TelemetryEndpoint additionally configures Claude Code to export its
+	// log records there. Empty leaves telemetry configuration alone, which is
+	// the default: hooks are passive, while telemetry configuration changes
+	// where a user's data goes and has to be asked for.
+	TelemetryEndpoint string
+	// DryRun returns the resulting document without writing it.
+	DryRun bool
+}
+
+// InstallFile applies Install to a settings file on disk. With DryRun set,
 // nothing is written and the resulting document is returned for inspection.
-func InstallFile(path, exePath string, dryRun bool) (Result, error) {
+//
+// Hooks and telemetry are merged into one document and written once, so a
+// dry run shows exactly what a real run would produce.
+func InstallFile(path string, opts InstallOptions) (Result, error) {
 	data, mode, err := readSettings(path)
 	if err != nil {
 		return Result{}, err
 	}
 
-	res, err := Install(data, exePath)
+	res, err := Install(data, opts.ExePath)
 	if err != nil {
 		return Result{}, err
 	}
-	if dryRun || !res.Changed {
+	if opts.TelemetryEndpoint != "" {
+		tel, err := InstallTelemetry(res.Content, opts.TelemetryEndpoint)
+		if err != nil {
+			return Result{}, err
+		}
+		res = Result{Changed: res.Changed || tel.Changed, Content: tel.Content}
+	}
+	if opts.DryRun || !res.Changed {
 		return res, nil
 	}
 

@@ -21,7 +21,7 @@ var hookNow = time.Date(2026, 8, 10, 19, 41, 2, 0, time.UTC)
 func logLines(t *testing.T, dir string) []string {
 	t.Helper()
 
-	f, err := os.Open(filepath.Join(dir, store.FileName))
+	f, err := os.Open(filepath.Join(dir, store.EventsFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

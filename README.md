@@ -1,11 +1,20 @@
-# Axiom
+<p align="center">
+  <img src="assets/axiom-banner.png"
+       alt="Axiom — Observe. Analyze. Explain."
+       width="100%" />
+</p>
 
-**A profiler for AI coding agents.**
+<p align="center">
+  <strong>A profiler for AI coding agents.</strong>
+</p>
 
-Find wasted context, redundant work, failure loops, and unnecessary cost.
+<p align="center">
+  Find wasted context, redundant work, failure loops, and unnecessary cost.
+</p>
 
-> Correctness first. Measure before optimizing.
-
+<p align="center">
+  <em>Correctness first. Measure before optimizing.</em>
+</p>
 ## Why Axiom?
 
 Most tooling can tell you *how much* an agent consumed: tokens, dollars,
@@ -29,38 +38,54 @@ prove from that record.
 What works today:
 
 - A passive Claude Code integration that observes session and tool events
+- An OTLP receiver that records what Claude Code reports consuming
 - An agent-neutral event model
-- A local append-only event log
+- Local append-only logs, one per stream
 - A profiler that reports repeated shell commands and repeated file reads
 
-Not built yet: repeated-search detection, failure-loop detection, cost and token
-accounting, recommendations, and support for agents other than Claude Code.
+Not built yet: correlating behavior with consumption, repeated-search detection,
+failure-loop detection, recommendations, and support for agents other than
+Claude Code.
 
 ## How it works
+
+Axiom observes two independent streams. One says what the agent did, the other
+says what it consumed.
 
 ```mermaid
 flowchart TD
     Claude["Claude Code"] -->|hooks| Adapter["Claude adapter"]
+    Claude -->|OTLP logs| Telemetry["Claude telemetry adapter<br/>attribute allowlist"]
     Future["Codex · Gemini CLI · Cursor · OpenCode"] -.->|future adapters| Events
-    Adapter --> Events["Canonical events<br/>agent-neutral"]
-    Events --> Store["Append-only JSONL store"]
-    Store --> Profiler["Profiler"]
+
+    Adapter --> Events["Canonical events<br/>what the agent did"]
+    Telemetry --> Usage["Canonical usage<br/>what the agent consumed"]
+    Events --> EventLog["events.jsonl"]
+    Usage --> UsageLog["usage.jsonl"]
+
+    EventLog --> Profiler["Profiler"]
+    UsageLog -.->|future correlation| Profiler
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
     Profiler --> Loops["Failure loops"]
-    Profiler --> Cost["Context & cost"]
     Redundant --> CLI["axiom profile"]
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Events,Store,Profiler,Redundant,CLI built
-    class Future,Loops,Cost planned
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Profiler,Redundant,CLI built
+    class Future,Loops planned
 ```
 
-Solid boxes exist today; dashed boxes are roadmap.
+Solid boxes exist today; dashed boxes and dashed arrows are roadmap.
 
-Everything below the canonical event boundary is written against Axiom's own
-event model, not against Claude Code. That is what makes a second agent an
-adapter rather than a second profiler.
+The two streams are deliberately independent. They have different writers and
+different lifetimes: hooks fire on every tool call, while usage records exist
+only while `axiom observe` is running. Keeping them apart is what lets Axiom
+tell "this session consumed nothing" from "nobody was listening". Joining them
+by tool invocation is future work.
+
+Everything below the canonical boundary is written against Axiom's own model,
+not against Claude Code. That is what makes a second agent an adapter rather
+than a second profiler.
 
 ## Philosophy
 
@@ -93,6 +118,8 @@ axiom version            # print version
 axiom init --dry-run     # preview the Claude Code hook installation
 axiom init               # install hooks for this project
 axiom init --global      # install hooks for all your projects
+axiom init --telemetry   # also export Claude Code's telemetry to axiom
+axiom observe            # record that telemetry while you work
 axiom profile            # analyze recorded events
 ```
 
@@ -120,6 +147,66 @@ Installation is conservative:
 
 Claude Code adds `.claude/settings.local.json` to your git excludes only when it
 writes that file itself. If Axiom creates it, add it to your `.gitignore`.
+
+## Recording usage
+
+Hooks say what the agent did. They say nothing about what it cost. Claude Code
+reports that separately, over OpenTelemetry, and `axiom observe` receives it.
+
+```bash
+axiom init --telemetry   # configure Claude Code to export, once
+axiom observe            # receive and record, while you work
+```
+
+`axiom observe` runs in the foreground and prints each measurement as it
+arrives:
+
+```console
+$ axiom observe
+Axiom is listening on http://127.0.0.1:4318/v1/logs
+Recording to ~/Library/Application Support/axiom/usage.jsonl
+
+Run 'axiom init --telemetry' if Claude Code is not configured to export yet.
+Press Ctrl-C to stop.
+
+  21:33:02  model_request  claude-sonnet-5  2 in · 121 out · 15689 cache read · 20051 cache write
+  21:33:03  tool_result    Bash             5 B returned
+  21:33:05  model_request  claude-sonnet-5  2 in · 3 out · 35740 cache read · 128 cache write
+^C
+Recorded 3 usage records in 43s.
+```
+
+Each line describes only what that telemetry record itself reported. Axiom does
+not look anything up in the event log to fill in the gaps, because joining the
+two streams is a separate problem and guessing at it here would make the output
+look more certain than it is.
+
+**Usage is only recorded while `axiom observe` is running.** Nothing is queued
+or backfilled. If you were not listening, that telemetry is gone, which is why a
+session with no usage records means *unknown*, never *free*.
+
+### What `axiom init --telemetry` configures
+
+Four environment variables in your Claude Code settings, and nothing else:
+
+```
+CLAUDE_CODE_ENABLE_TELEMETRY=1
+OTEL_LOGS_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+```
+
+Only the logs signal, and only through its per-signal variables. The generic
+`OTEL_EXPORTER_OTLP_*` variables apply to every signal, so Axiom never writes
+them: setting them would redirect metrics and traces it does not receive.
+
+If you already export telemetry somewhere, Axiom will not take it over. Any
+existing generic OTLP variable, or a logs variable set to something else, is
+reported as a conflict and **nothing is written at all** — not even the hooks.
+Use `--addr` on both commands if port 4318 is already in use.
+
+Claude Code's exporter is fire-and-forget. When Axiom is not listening, the
+telemetry is dropped and your session is unaffected.
 
 ## Profiling
 
@@ -179,18 +266,20 @@ nothing about context, tokens, or cost. For file reads it is usually a few
 milliseconds — the cost of a redundant read is the context it consumes, which
 Axiom does not estimate.
 
-## Where events go
+## Where the data goes
 
-Events are appended as JSON Lines to a local file:
+Both streams are appended as JSON Lines to local files in one directory:
 
 | Platform | Location |
 | --- | --- |
-| macOS | `~/Library/Application Support/axiom/events.jsonl` |
-| Linux | `$XDG_DATA_HOME/axiom/events.jsonl`, or `~/.local/share/axiom/events.jsonl` |
-| Windows | `%AppData%\axiom\events.jsonl` |
+| macOS | `~/Library/Application Support/axiom/` |
+| Linux | `$XDG_DATA_HOME/axiom/`, or `~/.local/share/axiom/` |
+| Windows | `%AppData%\axiom\` |
 
-Set `AXIOM_DATA_DIR` to override. The file is written `0600` and is meant to be
-readable with `tail`, `jq`, or your editor.
+`events.jsonl` holds what the agent did, written by hooks. `usage.jsonl` holds
+what it consumed, written by `axiom observe`. Set `AXIOM_DATA_DIR` to override
+the directory. Files are written `0600` and are meant to be readable with
+`tail`, `jq`, or your editor.
 
 ```console
 $ tail -1 ~/Library/Application\ Support/axiom/events.jsonl | jq .
@@ -217,6 +306,27 @@ $ tail -1 ~/Library/Application\ Support/axiom/events.jsonl | jq .
 }
 ```
 
+A usage record is deliberately smaller. It says what was consumed, and carries
+the identifiers that will one day let it be joined to the behavior above:
+
+```console
+$ tail -1 ~/Library/Application\ Support/axiom/usage.jsonl | jq .
+{
+  "schema_version": 1,
+  "agent": "claude-code",
+  "kind": "tool_result",
+  "timestamp": "2026-08-11T00:33:03.076Z",
+  "session_id": "b22394a4-9f31-4a0e-8c7d-1e5a3b6f24d8",
+  "turn_id": "1eab842d-0c55-4f3a-9b21-77d4e0a6c913",
+  "invocation_id": "toolu_01Tn7xQ2",
+  "tool_name": "Bash",
+  "duration_ms": 78,
+  "result_bytes": 5
+}
+```
+
+A measurement the agent did not report is absent rather than zero.
+
 ## Privacy
 
 Axiom is local-first and metadata-first. Nothing is sent anywhere, and Axiom
@@ -241,6 +351,26 @@ the schema lives in one of three places (`cwd`, `tool.metadata.file.path`, and
 Metadata extraction is an allowlist. Tools Axiom has not explicitly reviewed,
 including every MCP tool, contribute no metadata at all.
 
+### Telemetry privacy
+
+Claude Code attaches your email address, user and account identifiers, your
+organization identifier, and terminal details to **every** telemetry record it
+sends. Axiom reads thirteen named attributes and ignores everything else, so
+none of that reaches `usage.jsonl`. Service and machine attributes are dropped
+before records are even inspected.
+
+Claude Code can also be told to export prompts, assistant responses, tool
+arguments, tool output, and raw API bodies. Axiom never writes any of those
+settings, and would not store their contents if you enabled them yourself:
+
+```
+OTEL_LOG_USER_PROMPTS  OTEL_LOG_ASSISTANT_RESPONSES  OTEL_LOG_TOOL_DETAILS
+OTEL_LOG_TOOL_CONTENT  OTEL_LOG_RAW_API_BODIES
+```
+
+The receiver binds to loopback only, and Axiom still makes no outbound network
+calls of any kind.
+
 ## What Axiom cannot see
 
 Being honest about the blind spots, because they affect how the data should be
@@ -256,6 +386,10 @@ read:
   not the time spent in permission prompts.
 - **Recorded order only approximates execution order.** Hooks run as parallel
   processes, so two tool calls that overlapped may be recorded in either order.
+- **Usage is only recorded while `axiom observe` runs.** The usage log is
+  necessarily partial, and no usage record means unknown, not zero.
+- **Behavior and usage are not yet connected.** Axiom records both streams and
+  keeps the identifiers needed to join them, but does not join them today.
 
 ## Non-interference
 
@@ -263,6 +397,10 @@ Axiom is a passive observer. It never blocks, delays a decision, or modifies a
 tool call. Its hook always exits successfully and never writes to stdout, so a
 bug in Axiom cannot change what your agent does or sees. If Axiom cannot record
 an event, it drops the event and stays quiet.
+
+The same applies to telemetry. Claude Code exports it in the background and
+discards what it cannot deliver, so a receiver that is stopped, crashed, or was
+never started costs you nothing but the record.
 
 ## Development
 
