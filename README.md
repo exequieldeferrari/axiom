@@ -546,10 +546,39 @@ Two things sit outside a turn's total and are reported as such:
   identifiers of their own. A turn's observed consumption therefore does not
   contain everything a subagent launched from it spent.
 
+**A launch and a nested agent's work are two different counts.** A turn that
+delegated reports both, and they are not halves of one number:
+
+```
+       Tool calls                    8
+       Subagent launches             2
+       Calls by a nested agent       5
+       Uninterpreted                 1
+```
+
+*Subagent launches* counts the calls that handed work to a nested agent.
+*Calls by a nested agent* counts the work one did — calls that carried a nested
+agent's identifier, which were observed carrying the launching turn too, which
+is why they are inside this turn at all.
+
+Neither is derived from the other, and nothing recorded connects a launch to a
+particular call. All four combinations occur: a nested agent need not run a
+tool, and a log that begins mid-turn holds nested calls with no launch in it,
+because a launch is recorded only once its call has returned. Adding the two
+together counts nothing meaningful.
+
+Launches carry the same three outcomes as writes and edits, for a different
+reason: what the outcome settles is whether the delegation happened at all. A
+launch call reported failing started no nested agent — a capture produced one on
+the first attempt, from an agent type that did not exist — and a launch with no
+outcome recorded is evidence neither way. Both are shown beside the total rather
+than folded into it.
+
+The agent type is recorded but never reported. It is an open string, values are
+author-defined, and a failed launch declares one too.
+
 Turns are never ranked, and the section computes no ratios, averages, scores or
-recommendations. Claude Code's `Agent` calls currently reach Axiom without the
-metadata it needs to recognize a subagent spawn, so they appear as uninterpreted
-calls; the nested calls they produce are counted as subagent calls.
+recommendations.
 
 ### Read again in a later context epoch
 

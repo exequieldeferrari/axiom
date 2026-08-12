@@ -1,7 +1,25 @@
 # 13. Recorded turns
 
-- Status: accepted
+- Status: accepted, with one observation superseded by ADR 0014
 - Date: 2026-08-12
+
+> **Correction.** The observation below headed *Current `Agent` calls arrive
+> uninterpreted*, and the paragraph in *The turn model is the evidence and
+> nothing more* that rests on it, are wrong. Both are left in place and marked,
+> rather than rewritten, because what this ADR concluded is part of why the next
+> one exists.
+>
+> The raw-payload investigation behind ADR 0014 established that Claude Code
+> 2.1.228 supplies `tool_input.subagent_type` on every `Agent` call, and that
+> `internal/claude` derives `metadata.subagent` from it correctly. The adapter
+> had no gap. What discarded the classification was `internal/turns`, which had
+> no case for `metadata.subagent` and counted every launch as uninterpreted.
+>
+> The mistake was one of evidence, not of measurement. This ADR read the
+> `Uninterpreted` count in its own new section as though it said something about
+> the adapter. That count would have read the same with a perfect adapter, which
+> is exactly what it did, so it was never evidence about one. ADR 0014 records
+> what the payloads themselves contain.
 
 ## Context
 
@@ -67,8 +85,10 @@ relation out either.
 command, every turn's records appeared contiguously in append order. Order and
 membership can therefore be taken from the log without reconstructing anything.
 
-**Current `Agent` calls arrive uninterpreted.** Claude Code's `Agent` input
-carries `description` and `prompt` and no `subagent_type`, which is the field
+**Current `Agent` calls arrive uninterpreted.** *(Superseded by ADR 0014: the
+payload does carry `subagent_type`, the adapter does record it, and the gap was
+in `internal/turns`.)* Claude Code's `Agent` input carries `description` and
+`prompt` and no `subagent_type`, which is the field
 `internal/claude/metadata.go` requires to classify a subagent spawn. Both spawns
 in the capture reached the analysis with no metadata at all. That is an adapter
 gap and is not fixed here.
@@ -137,11 +157,13 @@ everywhere else — succeeded, reported failing, outcome not established — bec
 an outcome that was never established is not a failure, and a failed write may
 still have applied in part.
 
-There is no subagent-spawn category. The current agent does not report the
-metadata Axiom needs to recognize one, so a category for it would be empty in
-every real log and would say more about Axiom than about the work. Spawns are
-counted as uninterpreted, which is what they are to this version. Nested calls
-are counted separately, by the subagent identifier they carry.
+There is no subagent-spawn category. *(Superseded by ADR 0014, which adds one.
+The premise below is false: the metadata was being reported and recorded, so the
+category would not have been empty in any real log.)* The current agent does not
+report the metadata Axiom needs to recognize one, so a category for it would be
+empty in every real log and would say more about Axiom than about the work.
+Spawns are counted as uninterpreted, which is what they are to this version.
+Nested calls are counted separately, by the subagent identifier they carry.
 
 The classification is duplicated from the profiler rather than shared. This
 package may depend on the event model and the timeline; importing the findings
@@ -240,3 +262,6 @@ The `Agent` metadata gap is now visible in a second place: those calls appear as
 uninterpreted in a turn's composition. Fixing the adapter is left to its own
 change, where the evidence for what the current agent reports can be gathered
 properly.
+
+*(That change gathered the evidence and found no adapter gap to fix. See ADR
+0014.)*

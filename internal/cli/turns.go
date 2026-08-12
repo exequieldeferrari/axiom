@@ -33,6 +33,11 @@ const (
 	turnsSpend  = "Observed model consumption is what the agent reported for requests it\nlabelled with that turn. It is not the cost of the tool calls above it, not\nthe cost of the turn, and not a billing figure: nothing recorded says which\nrequest served which call. A turn with none recorded is not a turn that\nconsumed nothing — telemetry exists only while a receiver is running.\n"
 	turnsNested = "A nested agent's tool calls were observed carrying the turn that launched\nthem, and its model requests were observed carrying identifiers of their\nown. A turn's observed consumption therefore does not contain everything a\nsubagent it launched spent.\n"
 
+	// Printed only for a turn that recorded one or the other, because the
+	// two counts are read as one number split in half unless something says
+	// they are not.
+	turnsDelegation = "Subagent launches counts calls that handed work to a nested agent, and\ncalls by a nested agent counts the work one did. Neither is derived from\nthe other and nothing recorded connects a launch to a particular call: a\nlaunch reported failing started no agent, a launch whose outcome was not\nrecorded settles nothing either way, and nested calls appear with no launch\nbeside them whenever the log begins after one was already running.\n"
+
 	noRecordedTurns = "  No recorded tool call named a turn, so no turn recorded work.\n"
 
 	// These carry counts from the log, so their length is not known when they
@@ -72,6 +77,7 @@ func writeTurns(w io.Writer, ms []correlate.MeasuredTurn, outside correlate.Outs
 	// without it.
 	session := ""
 	consumption := false
+	delegation := false
 	for _, m := range shown {
 		if m.SessionID != session {
 			session = m.SessionID
@@ -79,10 +85,14 @@ func writeTurns(w io.Writer, ms []correlate.MeasuredTurn, outside correlate.Outs
 		}
 		writeTurn(w, m)
 		consumption = consumption || m.Observed != nil
+		delegation = delegation || m.Composition.Launches.Total() > 0 || m.SubagentCalls > 0
 	}
 
 	fmt.Fprint(w, turnsCaveat)
 	fmt.Fprint(w, "\n"+turnsWindow)
+	if delegation {
+		fmt.Fprint(w, "\n"+turnsDelegation)
+	}
 	if consumption {
 		fmt.Fprint(w, "\n"+turnsSpend)
 		fmt.Fprint(w, "\n"+turnsNested)
@@ -105,7 +115,8 @@ func writeTurn(w io.Writer, m correlate.MeasuredTurn) {
 	turnCount(w, "Shell", c.Shell)
 	turnOutcomes(w, "Writes", c.Writes)
 	turnOutcomes(w, "Edits", c.Edits)
-	turnCount(w, "Subagent calls", m.SubagentCalls)
+	turnOutcomes(w, "Subagent launches", c.Launches)
+	turnCount(w, "Calls by a nested agent", m.SubagentCalls)
 	turnCount(w, "Uninterpreted", c.Uninterpreted)
 
 	writeTurnConsumption(w, m.Observed)
