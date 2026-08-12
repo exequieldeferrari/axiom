@@ -50,6 +50,7 @@ What works today:
 - Measured read bytes per path, when a receiver recorded them
 - A profiler that reports repeated shell commands and repeated file reads
 - Repeated failed attempts at the same shell command
+- The tool calls recorded between a failed attempt and a later observed success
 - Measured tool output for redundant calls, when a receiver recorded it
 - The consumption observed in the turns a finding happened in
 
@@ -693,6 +694,68 @@ That is an observation about a later attempt and nothing else. What happened in
 between is not evidence of what made the difference, so nothing here is called
 a recovery or a fix. The line's absence means only that Axiom never saw that
 command succeed — never that the agent failed to get past it.
+
+#### What was recorded before the later success
+
+Where that line appears, Axiom also lists the tool calls it recorded between the
+last failed attempt and that success:
+
+```console
+         Recorded before the later success
+           Operations recorded             7
+           Whole-file reads                2
+           Edits                           1
+           Unrecognized                    4
+           Writes or edits recorded at
+             status.txt
+           Turn boundary                   none recorded
+```
+
+Every recorded call is counted, in categories that add up to the total, so the
+block can be reconciled against itself. Calls Axiom cannot describe are counted
+as themselves rather than dropped: in the capture this example comes from, four
+of the seven were a first-party tool outside the metadata allowlist, and an
+interval that hid them would have described three operations while looking
+complete.
+
+A count is a count of calls that reached the log, not of operations shown to
+have achieved anything. Writes and edits carry what the record establishes
+became of them, and a path names a file a call was recorded at — not a file left
+different, which is not observable either way. Command text is never inspected;
+other shell commands appear as a count.
+
+**None of this is why the command later succeeded.** It is the order the record
+puts things in. Nothing listed is established to have made the difference or to
+have been needed, and a shorter list is not a better one.
+
+Where nothing was recorded in between, the block says exactly that:
+
+```console
+         Recorded before the later success
+           No tool operation was recorded between them.
+           Turn boundary                   recorded between them
+```
+
+That describes the log, not the execution. A call rejected before it ran is
+never recorded, and a command can change state that no tool call reports — in
+the capture this example comes from, a counter file advanced twice between the
+last failure and the success, from inside the command. An empty block is not
+evidence of flakiness, of a retry, or of nothing having happened.
+
+The turn boundary line has three states, and they are not interchangeable:
+`none recorded`, `recorded between them`, and `not established`. A recorded
+boundary is where input Axiom does not observe may have arrived; it does not
+establish that anyone intervened.
+
+The question covers the failed attempt and the success themselves, not only
+what lies between them — a boundary can fall between the two with nothing
+recorded in between, which is how the second example above reads. Where any
+call in that span carried no turn identifier, including either of the two
+observations, the state is `not established` rather than `none recorded`.
+
+Write and edit paths are shown as recorded, up to five per interval, with any
+further distinct paths counted on a line of their own. The operation counts stay
+complete whatever the paths do.
 
 Failed attempts are not measured in bytes. In every capture Axiom has, the agent
 reported no result size for a call that failed, so there is nothing measured to

@@ -281,11 +281,12 @@ func writeReport(w io.Writer, in reportInput) {
 		return
 	}
 
-	measured, failures := false, false
+	measured, failures, intervals := false, false, false
 	for _, f := range findings {
 		writeFinding(w, f)
 		measured = measured || f.RedundantBytes != nil
 		failures = failures || f.Kind == profiler.KindRepeatedFailure
+		intervals = intervals || f.Interval != nil
 	}
 	fmt.Fprintf(w, "%s.\n\n%s", plural(len(findings), "finding"), observedCaveat)
 	if measured {
@@ -293,6 +294,10 @@ func writeReport(w io.Writer, in reportInput) {
 	}
 	if failures {
 		fmt.Fprint(w, "\n"+failureCaveat)
+	}
+	if intervals {
+		fmt.Fprint(w, "\n"+intervalCaveat)
+		fmt.Fprint(w, "\n"+intervalTurns)
 	}
 }
 
@@ -346,6 +351,11 @@ func writeFinding(w io.Writer, f correlate.Measured) {
 		}
 	}
 	detail(w, "Window", window(f.First, f.Last))
+	// Printed after the finding's own facts and before the measurements,
+	// because it comes from the same behavior stream the finding does.
+	if f.Interval != nil {
+		writeInterval(w, *f.Interval)
+	}
 	if f.Associated != nil {
 		writeAssociated(w, *f.Associated)
 	}

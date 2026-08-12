@@ -106,7 +106,118 @@ type Finding struct {
 	// meaning at all: a command that is never tried again simply leaves
 	// Axiom with nothing to report.
 	LaterSuccess bool
+
+	// Interval is what Axiom recorded between the last attempt and that
+	// success, and is nil unless LaterSuccess.
+	Interval *Interval
 }
+
+// Interval is the tool calls recorded in one scope between the last attempt of
+// a sequence of failed attempts and the first later observed success of the
+// same command.
+//
+// It is an ordering of recorded calls and nothing else. None of it is
+// established to have made the difference, no part of it is established to
+// have been needed, and a smaller interval is not a better one. What the calls
+// left behind is outside the record: the log says what became of a call and
+// never what it returned or wrote.
+//
+// The counts describe calls that reached the log. A call rejected before it
+// ran is never recorded, and a command can change state that no tool call
+// reports, so an interval is a lower bound on what happened between the two
+// observations.
+type Interval struct {
+	// Operations counts every recorded call in the interval, and equals the
+	// sum of the categories below. They partition the calls by the shape of
+	// the operation each carried, so the total can be reconciled against
+	// them.
+	Operations int
+
+	// WholeReads and RangedReads count reads of a whole file and of part of
+	// one. They are apart because they acquire different things, which is the
+	// distinction the rest of Axiom already draws.
+	WholeReads  int
+	RangedReads int
+	// Searches count recorded searches, and Shell counts recorded commands
+	// other than the one the finding is about. A command's text is never
+	// recorded, so nothing here says what any of them did.
+	Searches int
+	Shell    int
+	// Writes and Edits stay apart because the record distinguishes them.
+	Writes Outcomes
+	Edits  Outcomes
+	// Subagents counts calls that started a nested agent. The nested agent's
+	// own calls are recorded against a scope of its own and are not here.
+	Subagents int
+	// Uninterpreted counts recorded calls this version cannot describe: a
+	// tool outside the metadata allowlist, an MCP tool, and input it could
+	// not parse. They are counted rather than dropped, because an interval
+	// that omitted them would describe less work than was recorded while
+	// looking complete.
+	Uninterpreted int
+
+	// Paths names the files that recorded writes or edits in the interval, in
+	// the order they were first recorded, as the exact strings the agent
+	// named. Retention is bounded, and OmittedPaths counts the distinct paths
+	// left out.
+	//
+	// A path here says a call was recorded at it. It does not say the file
+	// changed, and it is not the reason the later attempt was observed
+	// succeeding.
+	Paths        []string
+	OmittedPaths int
+
+	// TurnBoundary says what the record establishes about turn boundaries
+	// falling between the two observations.
+	TurnBoundary TurnBoundary
+}
+
+// Outcomes counts recorded calls by what the record established became of
+// them.
+//
+// The three are kept apart because an outcome that was never established is
+// not a failure. Folding it into either would infer one from missing evidence,
+// and a failed write may still have applied in part, so neither is it nothing.
+type Outcomes struct {
+	Succeeded     int
+	Failed        int
+	Unestablished int
+}
+
+// Total counts the calls recorded, whatever became of them.
+func (o Outcomes) Total() int { return o.Succeeded + o.Failed + o.Unestablished }
+
+// TurnBoundary says what the record establishes about turn boundaries inside
+// an interval.
+//
+// A turn boundary is where input Axiom does not observe may have arrived,
+// which is why a sequence of failed attempts is confined to one turn. An
+// interval is not, so whether one fell inside it is reported rather than
+// assumed either way.
+//
+// The question is asked of the closed span from the last attempt through the
+// first later success, both included. Their own turns are part of it: a
+// boundary between the two falls inside the interval even where nothing was
+// recorded between them. Every consecutive pair in that span is compared, and
+// no call outside it is.
+type TurnBoundary string
+
+const (
+	// TurnBoundaryNone means every call in the span, both ends included,
+	// reported a turn, and each was the same as the one before it.
+	TurnBoundaryNone TurnBoundary = "none"
+	// TurnBoundaryRecorded means every call in the span reported a turn and
+	// at least one differed from the one before it.
+	TurnBoundaryRecorded TurnBoundary = "recorded"
+	// TurnBoundaryUnknown means a call in the span reported no turn, leaving
+	// a pair that cannot be compared. It is not the absence of a boundary.
+	//
+	// A missing identifier counts the same wherever it falls in the span,
+	// including on either end. Comparing across the gap to the nearest call
+	// that did report one would compare two calls that were never adjacent,
+	// and answer from evidence the record does not hold.
+	TurnBoundaryUnknown TurnBoundary = "unknown"
+)
 
 // Call identifies one occurrence of a repeated operation.
 //

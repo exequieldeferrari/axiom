@@ -57,9 +57,23 @@ func repeatedFailure(t *testing.T, extra ...event.Event) string {
 }
 
 // Words that would turn an observation into a claim Axiom cannot support.
+// Words that would turn what Axiom observed into a claim about why it
+// happened.
+//
+// The second group was added with the interval, which is where the temptation
+// is strongest: a list of work printed between a failed attempt and a later
+// success reads as the reason the failure went away unless the page refuses to
+// say so. It covers the three readings the block invites — that the work
+// explains the success, that it was needed, and that less of it would have
+// been better — and the diagnoses an empty interval invites.
 var forbidden = []string{
 	"recovered", "recovery", "fixed", "resolved", "unresolved",
 	"wasted", "saved", "failed to", "loop", "cost of the failure",
+
+	"caused", "root cause", "explains the", "explains why", "thanks to",
+	"flaky", "flake", "intermittent", "unblocked", "trajectory",
+	"was needed", "were needed", "necessary", "useful", "wasteful",
+	"efficient", "efficiency", "retry", "retried", "remediat",
 }
 
 func rejectForbidden(t *testing.T, out string) {

@@ -45,10 +45,114 @@ type scope struct {
 	shell runs
 	// failures holds the open sequence of failed attempts of each command.
 	failures map[string]*failureRun
-	// reported records where in the closed findings each command's failure
-	// sequences ended up, so that a command observed succeeding later can be
-	// noted on the findings that were already produced for it.
-	reported map[string][]int
+	// open holds, per command, the intervals of the failure sequences already
+	// reported for it that no success has frozen yet. It is how a command
+	// observed succeeding later reaches the findings produced for it.
+	open map[string][]*openInterval
+
+	// now is everything the scope has recorded so far. An interval is the
+	// difference between two of these, which is what keeps interval
+	// accounting to a fixed cost per event.
+	now observation
+	// lastTurn is the turn the previous recorded call reported, which may be
+	// none, and seenCall says whether there was a previous call at all. A
+	// turn is never compared across scopes.
+	lastTurn string
+	seenCall bool
+	// snapshotAfter names the command whose open sequence should take its
+	// interval start once the call being observed has been counted. An
+	// interval begins after the attempt, so the snapshot cannot be taken
+	// while the attempt is still being recorded.
+	snapshotAfter string
+}
+
+// observation is the running total of what one scope has recorded.
+//
+// Everything here is cumulative and monotonic, so subtracting an earlier copy
+// from a later one describes exactly the calls recorded between them. That is
+// the only mechanism available: the calls themselves are not retained.
+type observation struct {
+	operations                                                         int
+	wholeReads, rangedReads, searches, shell, subagents, uninterpreted int
+	writes, edits                                                      Outcomes
+	// turnChanges counts transitions between consecutive recorded calls where
+	// both reported a turn and the two differed.
+	turnChanges int
+	// unsettledTurns counts transitions where at least one of the two calls
+	// reported no turn, which establishes neither a boundary nor its absence.
+	//
+	// Both are counted per transition rather than per call, which is what
+	// makes the two ends of an interval behave alike. See scope.track.
+	unsettledTurns int
+}
+
+// since describes the calls recorded between an earlier observation and this
+// one. Paths are added by the caller, which is the only part of an interval
+// that is not a difference of counters.
+func (o observation) since(start observation) Interval {
+	iv := Interval{
+		Operations:    o.operations - start.operations,
+		WholeReads:    o.wholeReads - start.wholeReads,
+		RangedReads:   o.rangedReads - start.rangedReads,
+		Searches:      o.searches - start.searches,
+		Shell:         o.shell - start.shell,
+		Subagents:     o.subagents - start.subagents,
+		Uninterpreted: o.uninterpreted - start.uninterpreted,
+		Writes:        o.writes.since(start.writes),
+		Edits:         o.edits.since(start.edits),
+	}
+
+	// An unestablished boundary is reported ahead of an observed one: a call
+	// with no turn leaves the whole question open, and answering it from the
+	// calls that happened to carry one would state more than the record does.
+	switch {
+	case o.unsettledTurns > start.unsettledTurns:
+		iv.TurnBoundary = TurnBoundaryUnknown
+	case o.turnChanges > start.turnChanges:
+		iv.TurnBoundary = TurnBoundaryRecorded
+	default:
+		iv.TurnBoundary = TurnBoundaryNone
+	}
+	return iv
+}
+
+func (o Outcomes) since(start Outcomes) Outcomes {
+	return Outcomes{
+		Succeeded:     o.Succeeded - start.Succeeded,
+		Failed:        o.Failed - start.Failed,
+		Unestablished: o.Unestablished - start.Unestablished,
+	}
+}
+
+// maxIntervalPaths bounds the write and edit paths one interval retains. The
+// counts above them stay complete, and the paths left out are counted, so the
+// bound costs detail and never accuracy.
+const maxIntervalPaths = 5
+
+// openInterval accumulates the interval of one reported finding until a
+// success freezes it.
+type openInterval struct {
+	// finding is the position of the finding in Profiler.closed, which only
+	// grows, so the index stays valid.
+	finding int
+	start   observation
+	// seen holds every distinct write or edit path recorded since start, and
+	// order holds the bounded prefix of it that the finding will carry. Paths
+	// are kept rather than the calls that named them, so what grows is the
+	// number of distinct files written, not the length of the interval.
+	seen  map[string]struct{}
+	order []string
+}
+
+// note records a write or edit at a path.
+func (iv *openInterval) note(path string) {
+	if _, dup := iv.seen[path]; dup {
+		return
+	}
+	iv.seen[path] = struct{}{}
+	if len(iv.order) < maxIntervalPaths {
+		iv.order = append(iv.order, path)
+	}
 }
 
 // run is an uninterrupted sequence of the same operation. A run ends as soon
@@ -76,6 +180,14 @@ type run struct {
 type failureRun struct {
 	run
 	turn string
+	// start is the scope as it stood immediately after the last attempt
+	// recorded in this run, which is where the run's interval begins.
+	//
+	// It is taken at the attempt rather than where the run closes, because a
+	// run closes at the first barrier and operations that are not barriers
+	// can be recorded before one arrives. Taking it at the close would drop
+	// exactly those, and nothing recorded afterwards can recover them.
+	start observation
 	// digest is the failure every attempt so far reported, and is empty as
 	// soon as one of them reports a different failure or none. An empty
 	// digest is never a valid failure, so agreement can never be re-formed
@@ -141,6 +253,11 @@ func observedFailure(t *event.ToolCall) bool { return t.Outcome == event.Outcome
 
 func (p *Profiler) observe(ev event.Event) {
 	sc := p.scope(ev)
+	// The turn is tracked before anything can freeze an interval, because the
+	// success that freezes one bounds it: a boundary between the last attempt
+	// and that success falls inside the interval, even where nothing at all
+	// was recorded between them.
+	sc.track(ev)
 	o := classify(ev.Tool)
 
 	switch o.kind {
@@ -175,7 +292,7 @@ func (p *Profiler) observe(ev event.Event) {
 		}
 		for other := range sc.failures {
 			if other != o.subject {
-				p.endFailure(sc, other, false)
+				p.endFailure(sc, other)
 			}
 		}
 		switch {
@@ -198,7 +315,7 @@ func (p *Profiler) observe(ev event.Event) {
 			// the others did, and the sequence of failed attempts, without the
 			// success that would have been noted on it.
 			p.end(sc, sc.shell, KindRepeatedShell, o.subject)
-			p.endFailure(sc, o.subject, false)
+			p.endFailure(sc, o.subject)
 		}
 
 	case opObserve:
@@ -208,6 +325,90 @@ func (p *Profiler) observe(ev event.Event) {
 		p.endAll(sc, sc.reads, KindRepeatedRead)
 		p.endAll(sc, sc.shell, KindRepeatedShell)
 		p.endFailures(sc)
+	}
+
+	// Counted last, so that a call is outside the intervals it bounds: the
+	// attempt an interval starts after, and the success it ends before, are
+	// neither of them work recorded between the two.
+	sc.record(ev)
+	if sc.snapshotAfter != "" {
+		if fr, ok := sc.failures[sc.snapshotAfter]; ok {
+			fr.start = sc.now
+		}
+		sc.snapshotAfter = ""
+	}
+}
+
+// track follows the turn from one recorded call to the next.
+//
+// The question an interval answers is asked of the closed span running from
+// the last attempt, through everything recorded after it, to the success that
+// bounds it. Both ends of that span are part of the question: a boundary
+// between the last attempt and the success falls inside the interval even
+// where nothing at all was recorded between them.
+//
+// So it is counted per transition rather than per call, which is what makes
+// the two ends behave alike. The transition out of the attempt is counted
+// after the start snapshot is taken, and the transition into the success
+// before the interval freezes, so exactly the transitions of the closed span
+// fall in the difference. A turn identifier missing at either end leaves the
+// same question open as one missing in between, and neither end can be
+// compared against a call outside the span.
+func (sc *scope) track(ev event.Event) {
+	if !sc.seenCall {
+		sc.seenCall = true
+		sc.lastTurn = ev.TurnID
+		return
+	}
+
+	switch {
+	case sc.lastTurn == "" || ev.TurnID == "":
+		// Neither a boundary nor the absence of one. Without an identifier on
+		// both sides there is nothing to compare, and carrying the last turn
+		// past the gap would compare two calls that were never adjacent.
+		sc.now.unsettledTurns++
+	case sc.lastTurn != ev.TurnID:
+		sc.now.turnChanges++
+	}
+	sc.lastTurn = ev.TurnID
+}
+
+// record adds one call to what the scope has recorded, and to the paths of
+// every interval still open.
+func (sc *scope) record(ev event.Event) {
+	sc.now.operations++
+
+	switch sh := shapeOf(ev.Tool); sh {
+	case shapeWholeRead:
+		sc.now.wholeReads++
+	case shapeRangedRead:
+		sc.now.rangedReads++
+	case shapeSearch:
+		sc.now.searches++
+	case shapeShell:
+		sc.now.shell++
+	case shapeSubagent:
+		sc.now.subagents++
+	case shapeWrite, shapeEdit:
+		counts := &sc.now.writes
+		if sh == shapeEdit {
+			counts = &sc.now.edits
+		}
+		switch {
+		case observedSuccess(ev.Tool):
+			counts.Succeeded++
+		case observedFailure(ev.Tool):
+			counts.Failed++
+		default:
+			counts.Unestablished++
+		}
+		for _, intervals := range sc.open {
+			for _, iv := range intervals {
+				iv.note(ev.Tool.Metadata.File.Path)
+			}
+		}
+	default:
+		sc.now.uninterpreted++
 	}
 }
 
@@ -219,7 +420,7 @@ func (p *Profiler) attempt(sc *scope, ev event.Event, subject string) {
 	// answers that interruption, so the sequence ends and the attempt starts
 	// no new one.
 	if f != nil && f.Kind == event.FailureKindInterrupt {
-		p.endFailure(sc, subject, false)
+		p.endFailure(sc, subject)
 		return
 	}
 
@@ -227,35 +428,49 @@ func (p *Profiler) attempt(sc *scope, ev event.Event, subject string) {
 	// that reports none leaves Axiom unable to tell a repetition from an
 	// instruction it never saw. The finding is withheld rather than guessed.
 	if ev.TurnID == "" {
-		p.endFailure(sc, subject, false)
+		p.endFailure(sc, subject)
 		return
 	}
 
 	fr, ok := sc.failures[subject]
 	if ok && fr.turn != ev.TurnID {
-		p.endFailure(sc, subject, false)
+		p.endFailure(sc, subject)
 		ok = false
 	}
-	if !ok {
+	if ok {
+		fr.extend(ev)
+		fr.agree(f)
+	} else {
 		sc.failures[subject] = newFailureRun(subject, ev)
-		return
 	}
-	fr.extend(ev)
-	fr.agree(f)
+	// Whatever this run turns out to contain, its interval begins after the
+	// attempt recorded now. Each further attempt moves the start, so the run
+	// ends up holding the one the last attempt left.
+	sc.snapshotAfter = subject
 }
 
 // succeeded records that a command ran without failing, which ends its
 // sequence of failed attempts and is worth noting on the sequences already
 // reported for it.
 func (p *Profiler) succeeded(sc *scope, subject string) {
-	p.endFailure(sc, subject, true)
-	for _, i := range sc.reported[subject] {
-		p.closed[i].LaterSuccess = true
+	p.endFailure(sc, subject)
+
+	for _, iv := range sc.open[subject] {
+		f := &p.closed[iv.finding]
+		f.LaterSuccess = true
+
+		interval := sc.now.since(iv.start)
+		interval.Paths = iv.order
+		interval.OmittedPaths = len(iv.seen) - len(iv.order)
+		f.Interval = &interval
 	}
+	// The first success is what the interval is bounded by, so the findings
+	// it froze are dropped here and no later success can reach them again.
+	delete(sc.open, subject)
 }
 
 // endFailure closes the open sequence of failed attempts of one command.
-func (p *Profiler) endFailure(sc *scope, subject string, succeeded bool) {
+func (p *Profiler) endFailure(sc *scope, subject string) {
 	fr, ok := sc.failures[subject]
 	if !ok {
 		return
@@ -266,14 +481,17 @@ func (p *Profiler) endFailure(sc *scope, subject string, succeeded bool) {
 	if !ok {
 		return
 	}
-	f.LaterSuccess = succeeded
-	sc.reported[subject] = append(sc.reported[subject], len(p.closed))
+	sc.open[subject] = append(sc.open[subject], &openInterval{
+		finding: len(p.closed),
+		start:   fr.start,
+		seen:    make(map[string]struct{}),
+	})
 	p.closed = append(p.closed, f)
 }
 
 func (p *Profiler) endFailures(sc *scope) {
 	for subject := range sc.failures {
-		p.endFailure(sc, subject, false)
+		p.endFailure(sc, subject)
 	}
 }
 
@@ -286,7 +504,7 @@ func (p *Profiler) scope(ev event.Event) *scope {
 			reads:    make(runs),
 			shell:    make(runs),
 			failures: make(map[string]*failureRun),
-			reported: make(map[string][]int),
+			open:     make(map[string][]*openInterval),
 		}
 		p.scopes[key] = sc
 	}
@@ -534,6 +752,77 @@ func classify(t *event.ToolCall) op {
 		// Subagents included: a nested agent can do anything, and its own
 		// tool calls are recorded against a different scope.
 		return op{kind: opOpaque}
+	}
+}
+
+// shape is what an interval counts a recorded call as.
+type shape int
+
+const (
+	// shapeUninterpreted is a call this version cannot describe.
+	shapeUninterpreted shape = iota
+	shapeWholeRead
+	shapeRangedRead
+	shapeSearch
+	shapeShell
+	shapeWrite
+	shapeEdit
+	shapeSubagent
+)
+
+// shapeOf reduces a tool call to the shape of the operation it carried.
+//
+// This asks a different question from classify, which says whether an
+// operation could have made repeating an earlier one worthwhile. Answering
+// both at once would make one of them wrong: classify deliberately treats a
+// background command, a subagent and an unrecognised tool alike, because their
+// effects are equally unbounded, while an interval has to tell them apart to
+// describe what was recorded. A file operation that named no path is counted
+// as uninterpreted for the same reason it is elsewhere, that there is nothing
+// to attribute it to.
+//
+// The shape is independent of what became of the call. A count of reads is a
+// count of read calls that reached the log, not of files the agent can be
+// shown to have obtained; only writes and edits carry their outcomes, because
+// what those leave behind is the part of an interval that could have persisted.
+func shapeOf(t *event.ToolCall) shape {
+	m := t.Metadata
+	switch {
+	case m == nil:
+		return shapeUninterpreted
+
+	case m.File != nil:
+		if m.File.Path == "" {
+			return shapeUninterpreted
+		}
+		switch m.File.Access {
+		case event.AccessRead:
+			if m.File.Offset != nil || m.File.Limit != nil {
+				return shapeRangedRead
+			}
+			return shapeWholeRead
+		case event.AccessWrite:
+			return shapeWrite
+		case event.AccessEdit:
+			return shapeEdit
+		default:
+			return shapeUninterpreted
+		}
+
+	case m.Shell != nil:
+		// A background command is still a recorded command. Its effects are
+		// unbounded, which is what makes it a barrier elsewhere, but that is
+		// a statement about what it could have done and not about what it was.
+		return shapeShell
+
+	case m.Search != nil:
+		return shapeSearch
+
+	case m.Subagent != nil:
+		return shapeSubagent
+
+	default:
+		return shapeUninterpreted
 	}
 }
 
