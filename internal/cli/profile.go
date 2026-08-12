@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/exequieldeferrari/axiom/internal/activity"
+	"github.com/exequieldeferrari/axiom/internal/analysis"
 	"github.com/exequieldeferrari/axiom/internal/correlate"
 	"github.com/exequieldeferrari/axiom/internal/crossread"
 	"github.com/exequieldeferrari/axiom/internal/delegation"
@@ -18,7 +19,6 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/reacquire"
 	"github.com/exequieldeferrari/axiom/internal/store"
 	"github.com/exequieldeferrari/axiom/internal/timeline"
-	"github.com/exequieldeferrari/axiom/internal/turns"
 )
 
 // runProfile analyzes the recorded event log. It never writes to it.
@@ -79,7 +79,7 @@ func asked(flags *flag.FlagSet, name string) bool {
 }
 
 func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
-	scanner, err := store.ScanEvents(dir)
+	log, err := analysis.Analyze(dir, analysis.Options{Session: opts.session})
 	if errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprint(stdout, "No events recorded yet.\nRun 'axiom init', then use Claude Code.\n")
 		return nil
@@ -87,63 +87,15 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer scanner.Close()
-
-	// Measurements are indexed first because the profile resolves them as each
-	// read arrives, and a measurement read afterwards would arrive too late to
-	// be attached to anything.
-	usage := loadUsage(dir)
-	p := profiler.New()
-	a := activity.New(func(session, turn, invocation string) (int64, bool) {
-		return usage.index.ResultBytes(correlate.Key{
-			SessionID: session, TurnID: turn, InvocationID: invocation,
-		})
-	})
-	t := timeline.New()
-	q := reacquire.New()
-	tn := turns.New()
-	// Delegation is fed every record and resolves nothing until it is asked
-	// for a report: a launch and the work it names arrive in either order,
-	// and both orders were observed.
-	dl := delegation.New()
-	// Reading across related scopes holds only per-scope acquisition counts,
-	// and is joined to the relations delegation established when the report
-	// is taken.
-	cr := crossread.New()
-
-	analyzed := 0
-	for scanner.Scan() {
-		record := scanner.Record()
-		// A session is selected by the identifier the agent recorded, exactly.
-		// Matching a prefix would silently analyze a different session that
-		// happened to start the same way.
-		if opts.session != "" && record.SessionID != opts.session {
-			continue
-		}
-		analyzed++
-		p.Add(record)
-		a.Add(record)
-		// Epoch membership comes from the timeline as it observes the record,
-		// in the same pass, because append order is the only thing that
-		// establishes it.
-		at := t.Add(record)
-		q.Add(record, at)
-		tn.Add(record, at)
-		dl.Add(record)
-		cr.Add(record)
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
 
 	// An identifier that matched nothing is a mistake worth naming. Reporting
 	// an empty profile instead would look like a session that did no work.
-	if opts.session != "" && analyzed == 0 {
+	if opts.session != "" && log.Records == 0 {
 		fmt.Fprintf(stdout, "No events recorded for session %q.\n", opts.session)
 		// A record Axiom could not decode cannot be attributed to a session,
 		// so one of them may have been this one. Saying nothing here would
 		// turn "not found" into a stronger claim than the log supports.
-		if skipped := scanner.Stats().Skipped(); skipped > 0 {
+		if skipped := log.Stats.Skipped(); skipped > 0 {
 			fmt.Fprintf(stdout, "%s skipped and could not be attributed to any session.\n",
 				plural(skipped, "record"))
 		}
@@ -151,76 +103,23 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		return nil
 	}
 
-	report := p.Report()
-	recorded := tn.Report()
-	// Taken once. The launches and the relations they established are one
-	// derivation, and the section below groups reading against the relations
-	// rather than deriving them a second time.
-	delegated := dl.Report()
-	measuredTurns, outside := usage.index.MeasureTurns(recorded.Turns)
+	measuredTurns, outside := log.Usage.Index.MeasureTurns(log.Turns.Turns)
 	writeReport(stdout, reportInput{
-		findings:     report,
-		activity:     a.Profile(),
-		context:      t.Report(),
-		reacquire:    q.Report(),
-		measured:     usage.index.Measure(report.Findings),
+		findings:     log.Findings,
+		activity:     log.Activity,
+		context:      log.Context,
+		reacquire:    log.Reacquire,
+		measured:     log.Usage.Index.Measure(log.Findings.Findings),
 		turns:        measuredTurns,
 		outside:      outside,
-		unattributed: recorded.CallsOutsideTurns,
-		delegation:   delegated,
-		crossread:    cr.Report(delegated),
-		stats:        scanner.Stats(),
-		usage:        usage,
+		unattributed: log.Turns.CallsOutsideTurns,
+		delegation:   log.Delegation,
+		crossread:    log.CrossRead,
+		stats:        log.Stats,
+		usage:        log.Usage,
 		scope:        opts,
 	})
 	return nil
-}
-
-// usageLog is the outcome of reading the usage stream.
-//
-// A log that is absent and a log that could not be read leave findings equally
-// unmeasured, but they do not mean the same thing: the first is the ordinary
-// state of a machine where no receiver has run, and the second is a problem
-// only the user can resolve.
-type usageLog struct {
-	index *correlate.Index
-	stats store.ScanStats
-	// unreadable is set when measurements may exist but Axiom could not read
-	// them, and is nil when there were simply none to read.
-	unreadable error
-}
-
-// loadUsage indexes the measurements recorded beside the event log.
-//
-// Telemetry is optional and always will be: it exists only for the time a
-// receiver was running. Nothing here fails the analysis; the worst outcome is
-// findings without measurements.
-func loadUsage(dir string) usageLog {
-	log := usageLog{index: correlate.NewIndex()}
-
-	scanner, err := store.ScanUsage(dir)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		// No receiver has ever recorded here, which is the common case.
-		return log
-	case err != nil:
-		log.unreadable = err
-		return log
-	}
-	defer scanner.Close()
-
-	for scanner.Scan() {
-		log.index.Add(scanner.Record())
-	}
-	log.stats = scanner.Stats()
-	if err := scanner.Err(); err != nil {
-		// A log that could not be read in full is discarded rather than used
-		// in part: the record that would have made a measurement ambiguous
-		// may be exactly the one that was lost.
-		log.index = correlate.NewIndex()
-		log.unreadable = err
-	}
-	return log
 }
 
 const (
@@ -275,7 +174,7 @@ type reportInput struct {
 	crossread crossread.Report
 
 	stats store.ScanStats
-	usage usageLog
+	usage analysis.Usage
 	scope profileOptions
 }
 
@@ -300,16 +199,16 @@ func writeReport(w io.Writer, in reportInput) {
 			plural(skipped, "record"), describeSkipped(in.stats))
 	}
 	// A usage record Axiom cannot read costs a measurement, not a finding.
-	if skipped := usage.stats.Skipped(); skipped > 0 {
+	if skipped := usage.Stats.Skipped(); skipped > 0 {
 		fmt.Fprintf(w, "\nWarning: %s skipped (%s); some measurements are missing.\n",
-			plural(skipped, "usage record"), describeSkipped(usage.stats))
+			plural(skipped, "usage record"), describeSkipped(usage.Stats))
 	}
 	// Telemetry that is absent needs no explanation. Telemetry that exists and
 	// cannot be read does, or the missing measurements look like an absence of
 	// redundant output rather than an absence of evidence.
-	if usage.unreadable != nil {
+	if usage.Unreadable != nil {
 		fmt.Fprintf(w, "\nWarning: the usage log could not be read (%v); findings are unmeasured.\n",
-			usage.unreadable)
+			usage.Unreadable)
 	}
 
 	writeTimeline(w, in.context)

@@ -1,0 +1,204 @@
+Axiom Profile
+─────────────
+
+Scope               session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+Events              14
+Sessions analyzed   1
+Tool calls          11
+
+Context epochs
+
+  session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d  ·  2 epochs
+    first recorded 2026-08-10 20:25:04 UTC
+    1  opened by startup, ended by a context reset
+       9 tool calls, 1 turn with work, 2 calls by a subagent
+    2  opened by compact, ended with the session (other)
+       2 tool calls, 1 turn with work
+
+A context epoch is the work recorded for one session identity between the
+points where the agent reported starting a context. Compaction was observed
+starting one under the same identity; /clear was observed ending a session
+and starting the next under a different one. Axiom never links two
+identities: where one appears after another here, that is the order they
+were recorded in and nothing more.
+
+A turn can span a context reset, so turns with work are counted inside each
+epoch and do not add up to a session total.
+
+Recorded turns
+
+  session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+    turn 1  ·  2026-08-10 20:25:05 → 20:25:12 UTC
+       Context epoch                 1
+       Tool calls                    8
+       Whole-file reads              5
+       Shell                         1
+       Subagent launches             2
+         subagent launch 1  ·  1 call
+           1 whole-file read
+         subagent launch 2  ·  1 call
+           1 whole-file read
+       Calls by a nested agent       2
+       Observed model consumption    not recorded
+
+    turn 2  ·  2026-08-10 20:25:15 → 20:25:16 UTC
+       Context epoch                 2
+       Tool calls                    2
+       Whole-file reads              1
+       Edits                         1
+       Observed model consumption    not recorded
+
+A recorded turn is a turn identifier at least one recorded tool call named.
+A turn is the context an agent labels with an identifier of its own: it is
+not established to be one request, one task, or one complete unit of work.
+Identifiers carried only by a session start or end, or only by a usage
+record, named no recorded work and are not listed, because a turn built from
+one would be a turn that did nothing. Turns are numbered within a session
+identity, in the order their work was recorded, and an identifier means
+nothing outside the session that issued it.
+
+The time beside a turn is the earliest and latest recorded on its calls. It
+is not how long the turn took, and nothing above is ordered by it:
+membership and order come from the order records were appended.
+
+Subagent launches counts calls that handed work to a nested agent, and
+calls by a nested agent counts the work one did. Neither is derived from
+the other, and adding them together counts nothing meaningful: a launch
+reported failing started no agent, a launch whose outcome was not recorded
+settles nothing either way, and nested calls appear with no launch beside
+them whenever the log begins after one was already running.
+
+A launch listed under a turn is one the agent returned an agent identity
+for, and the work under it is the recorded calls that reported that same
+identity. That is the whole claim. It does not establish that everything
+the agent did reached the log, that it finished what it was asked, or
+anything about what it consumed, and these counts are not a breakdown of
+calls by a nested agent above: that counts every nested call, including
+work no recorded launch accounts for.
+
+1 recorded tool call named no turn, so they appear in no turn above.
+
+Read across related agent scopes
+
+  /repo/calc/calc.go
+      session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+      the session scope and the agents it launched
+        the session scope, 3 reads
+        agent 1, 1 read
+
+  /repo/strutil/strutil.go
+      session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+      the session scope and the agents it launched
+        the session scope, 1 read
+        agent 2, 1 read
+
+2 paths read in more than one related agent scope.
+
+A path is listed where a successful whole-file read of it was recorded in
+more than one agent scope, and a recorded launch relates those scopes. That
+is what it says. It does not say that either agent held what the other read,
+that one reading stood in for the other, or that anything about how the work
+was handed over follows from it.
+
+Scopes are related only through a launch whose record carried the agent
+identity it returned. A launch with no identity recorded relates nothing,
+and a nested agent whose identity no recorded launch returned takes part in
+no group. Timing, proximity, turn identifiers and tool names take no part in
+any of it.
+
+A group is one launching scope together with the scopes it launched
+directly. The relation is followed no further: a group holding every agent
+of a session would say nothing about why two scopes appear side by side.
+Two agents launched by one scope are compared; an agent and the scope that
+launched its launcher are not.
+
+Nothing here is an ordering. A nested agent's work reaches the log before
+the launch that names it as often as after, so the section says a path was
+read in more than one related scope and never which read came first.
+
+Paths are compared as the exact strings the agent recorded. Two spellings of
+one file stay apart, which can lose a relation and never invent one.
+
+The session scope is the work recorded under no agent identity. A numbered
+agent is one nested identity, numbered within its session in the order the
+log first mentions it: the numbering is Axiom's own, and it names no agent
+outside this report.
+
+Read again in a later context epoch
+
+  /repo/calc/calc.go
+      session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+      epoch 1, opened by startup, 2 reads, no later write or edit recorded
+      epoch 2, opened by compact, 1 read, later write or edit recorded
+
+1 path read in more than one context epoch.
+
+A path is listed where a whole-file read of it succeeded in more than one
+context epoch of one session identity. That is an observed ordering of reads
+around a recorded boundary, and nothing more: an epoch boundary is a
+structural boundary in the log, not proof that the agent's context was
+discarded, and an epoch also ends where a session does, which discards
+nothing.
+
+Boundaries are recorded only where the agent reported one, so they are a
+lower bound: a boundary Axiom did not observe leaves the reads on either
+side of it looking like one epoch, and no relation is reported.
+
+Where a write or edit of the same path was recorded after the read in that
+epoch, the line says so. It is an ordering of two recorded operations. It
+does not say the file changed, because a call the agent reported failing was
+still a call that was recorded, and it does not say why the read happened.
+Where none was recorded, that is not evidence the read achieved nothing.
+
+Session identities are never compared. Nothing recorded links one to
+another, so a path read under two of them appears here under neither.
+
+A nested agent reasons in a context of its own, and these epochs are the
+session's, so its reads are not part of this. 2 successful whole-file reads
+were set aside.
+
+Observed operations
+
+  File              7   read, written or edited; attributed by path below
+  Shell             1   effects not observable; never attributed
+  Subagent          2   the nested agent's calls are recorded separately
+  Unrecognized      1   Axiom cannot say what these did
+
+Each observed tool call is counted once above, and a call rejected before it
+ran is never recorded at all. Only a file operation names a path, so only
+those are attributed below; the rest is work Axiom either cannot attribute
+to a path or cannot interpret at all.
+
+Work by path, under /repo
+
+  calc/calc.go
+      4 reads, 1 modification, 2 turns, 58ms
+  strutil/strutil.go
+      2 reads, 1 turn, 14ms
+
+Every file operation observed at a path is counted: reads of a whole file,
+ranged reads of part of one, writes and edits, and operations that failed. A
+category with none observed is left out of a path's line. Time is the sum of
+the durations the agent reported for those operations, not elapsed time. A
+dash means Axiom recorded nothing complete; it never means zero.
+
+The lines above describe the 7 of 11 observed tool calls that named a path.
+
+No read was measured, so no path reports read bytes. Sizes are recorded only
+while a receiver is running, which is not an absence of bytes.
+
+Findings
+
+  Repeated file read                         session 5d1a2b3c
+    Read 2 times, with no agent modification observed in between
+    Potentially redundant reads       1
+    Repeated-call tool time           7ms
+    File                              /repo/calc/calc.go
+    Window                            2026-08-10 20:25:09 → 20:25:11 UTC
+
+1 finding.
+
+Repeated-call tool time is how long the repeated calls took to execute, not
+counting the first. It is not the total time of the operation, and it
+measures nothing about context, tokens, or cost. Axiom reports what it
+observed; a file may still have been changed by something outside the agent.

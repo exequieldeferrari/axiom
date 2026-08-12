@@ -367,6 +367,58 @@ else
 fi
 
 echo
+echo "Compare"
+# Two captures are built from the log this check already recorded: the
+# candidate is the same records under a different session identity, so every
+# structural dimension has to come out unchanged. The third directory holds
+# both identities, which is not a capture and must be refused rather than
+# summed.
+other="99999999-8888-7777-6666-555555555555"
+baseline="$work/captures/baseline"
+candidate="$work/captures/candidate"
+mixed="$work/captures/mixed"
+mkdir -p "$baseline" "$candidate" "$mixed"
+cp "$AXIOM_DATA_DIR/events.jsonl" "$baseline/events.jsonl"
+sed "s/$session/$other/g" "$AXIOM_DATA_DIR/events.jsonl" >"$candidate/events.jsonl"
+cat "$baseline/events.jsonl" "$candidate/events.jsonl" >"$mixed/events.jsonl"
+
+if "$axiom" compare "$baseline" "$candidate" >"$out/compare.txt" 2>&1; then
+	have "compares two captures" "$out/compare.txt" \
+		"Capture shape" "Recorded work by shape" "Delegation" \
+		"Read across related agent scopes" "Read again in a later context epoch"
+	have "states what a comparison does not establish" "$out/compare.txt" \
+		"same task" "asserted by whoever selected the two captures"
+	# The same records under another identity differ in nothing, and every
+	# category of the partition is printed whether or not it holds anything.
+	matches "reports one capture's structure as unchanged" "$out/compare.txt" \
+		'^  Whole-file reads +3 +3 +same'
+	matches "keeps shell in the partition" "$out/compare.txt" '^  Shell +3 +3 +same'
+	matches "keeps uninterpreted calls in the partition" "$out/compare.txt" \
+		'^  Uninterpreted +[0-9]+ +[0-9]+ +same'
+	matches "keeps outcome states apart" "$out/compare.txt" \
+		'^ +outcome not established +[0-9]'
+	# Telemetry presence is stated, and nothing measured is compared.
+	matches "states whether telemetry exists" "$out/compare.txt" '^  Usage log +[a-z]+ +[a-z]+$'
+	if grep -qEi 'token|cost|\$|efficien|waste|better|worse|improve|regress|%' "$out/compare.txt"; then
+		bad "the comparison carries consumption or a judgement"
+	else
+		ok "compares no consumption and passes no judgement"
+	fi
+else
+	bad "'axiom compare' failed: $(cat "$out/compare.txt")"
+fi
+
+status=0
+"$axiom" compare "$mixed" "$baseline" >"$out/compare-mixed.txt" 2>&1 || status=$?
+if [ "$status" -eq 2 ]; then
+	ok "a directory holding two sessions is refused with exit 2"
+else
+	bad "comparing a two-session directory exited $status, want 2"
+fi
+have "the refusal names the identities and the way to select one" "$out/compare-mixed.txt" \
+	"more than one session identity" "$session" "$other" "--baseline-session"
+
+echo
 echo "Usage errors"
 status=0
 "$axiom" definitely-not-a-command >"$out/unknown.txt" 2>&1 || status=$?

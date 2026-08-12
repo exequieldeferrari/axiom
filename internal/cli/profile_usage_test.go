@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/exequieldeferrari/axiom/internal/event"
-	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/store"
 )
 
@@ -191,9 +190,6 @@ func TestProfileIsSilentWhenThereIsNoUsageLog(t *testing.T) {
 	if strings.Contains(out, "Warning") {
 		t.Errorf("an absent usage log was reported as a problem:\n%s", out)
 	}
-	if got := loadUsage(dir).unreadable; got != nil {
-		t.Errorf("unreadable = %v, want nil when there is no usage log", got)
-	}
 }
 
 // A usage log that exists and cannot be read is not the same as none at all.
@@ -227,43 +223,6 @@ func TestProfileWarnsWhenTheUsageLogCannotBeRead(t *testing.T) {
 	}
 	if strings.Contains(out, "Redundant tool output") {
 		t.Errorf("a measurement was reported from a log that could not be read:\n%s", out)
-	}
-}
-
-// Failing to open the log is reported for the same reason as failing to read
-// it, and is distinct from the log being absent.
-func TestLoadUsageSeparatesAnUnopenableLogFromAnAbsentOne(t *testing.T) {
-	t.Parallel()
-
-	// A data directory that is not a directory: the log is not absent, it
-	// cannot be opened.
-	blocked := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	unopenable := loadUsage(blocked)
-	if unopenable.unreadable == nil {
-		t.Error("unreadable = nil, want an error when the log cannot be opened")
-	}
-	if got := unopenable.index.Measure([]profiler.Finding{measurableFinding()})[0].RedundantBytes; got != nil {
-		t.Errorf("RedundantBytes = %d, want nil when nothing could be read", *got)
-	}
-
-	if got := loadUsage(t.TempDir()).unreadable; got != nil {
-		t.Errorf("unreadable = %v, want nil when the log is simply absent", got)
-	}
-}
-
-// measurableFinding is a finding that would be measured if the index held
-// anything for it.
-func measurableFinding() profiler.Finding {
-	return profiler.Finding{
-		SessionID: "session-1",
-		Calls: []profiler.Call{
-			{TurnID: "turn-1", InvocationID: "call-1"},
-			{TurnID: "turn-1", InvocationID: "call-2"},
-		},
 	}
 }
 
