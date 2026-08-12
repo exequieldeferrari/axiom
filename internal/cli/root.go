@@ -40,10 +40,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		printRootHelp(stdout)
 		return nil
 	case "version", "-v", "--version":
-		_, err := fmt.Fprintf(stdout, "axiom %s\n", version.Version)
+		_, err := fmt.Fprintf(stdout, "axiom %s\n", version.String())
 		return err
 	case "init":
 		return reportUsage(stderr, runInit(args[2:], stdout))
+	case "uninstall":
+		return reportUsage(stderr, runUninstall(args[2:], stdout))
 	case "hook":
 		return reportUsage(stderr, runHook(args[2:]))
 	case "observe":
@@ -75,6 +77,7 @@ Usage:
 
 Commands:
   init        Install the Claude Code integration
+  uninstall   Remove the Claude Code integration
   observe     Record agent telemetry while you work
   profile     Analyze recorded events and report redundant work
   hook        Record an agent event (invoked by agent hooks, not by hand)

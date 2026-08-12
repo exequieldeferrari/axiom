@@ -57,6 +57,23 @@ func TestRunInstallDefaultsToProjectLocalSettings(t *testing.T) {
 	}
 }
 
+// Claude Code loads settings at session start, so hooks installed during a
+// session do nothing until the next one. A user who is not told that profiles an
+// empty log and concludes Axiom does not work.
+func TestRunInstallSaysToStartANewSession(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout bytes.Buffer
+	if err := runInstall(initOptions{}, testExe, &stdout); err != nil {
+		t.Fatalf("runInstall: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "start a new session") {
+		t.Errorf("output does not say to start a new Claude Code session:\n%s", out)
+	}
+}
+
 // Claude Code reads .claude/settings.local.json at the repository root, so
 // installing into the current directory would write a file it never reads.
 func TestRunInstallTargetsTheRepositoryRoot(t *testing.T) {
@@ -240,13 +257,19 @@ func TestParseInitFlags(t *testing.T) {
 }
 
 // The test binary itself lives under the temp directory, so this exercises the
-// guard that stops `go run` from installing a hook that disappears on exit.
+// guard that stops a hook from being installed for an executable that
+// disappears. The message has to serve both people who hit it: someone running
+// an unpacked release archive, and a contributor using `go run`.
 func TestAxiomPathRejectsTemporaryBuilds(t *testing.T) {
 	t.Parallel()
 
-	if _, err := axiomPath(); err == nil {
+	_, err := axiomPath()
+	if err == nil {
 		t.Skip("test binary is not running from a temporary directory")
-	} else if !strings.Contains(err.Error(), "temporary build") {
-		t.Fatalf("error = %v, want it to explain the temporary build", err)
+	}
+	for _, want := range []string{"temporary directory", "somewhere permanent", "make build"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
 	}
 }

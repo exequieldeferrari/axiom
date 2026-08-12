@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into a build that is not published, such as v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+
+      # A tag names the release it is. A manual run has to say which version it
+      # is building, because the ref it runs on is a branch: without this, a
+      # dispatch on main would stamp "main" into the binary and the archives.
+      - name: Resolve the version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            candidate="$GITHUB_REF_NAME"
+          else
+            candidate="$INPUT_VERSION"
+          fi
+          # The tag trigger is a glob, so an unsupported tag can start this run.
+          # What it cannot do is get past here.
+          if ! version="$(./scripts/release-version.sh "$candidate")"; then
+            echo "::error::'$candidate' is not a release version of the form vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "building $version"
+
+      - name: Build the artifacts
+        run: ./scripts/build-release.sh "${{ steps.version.outputs.version }}" dist
+
+      - name: Upload the artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiom-${{ steps.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+  # The artifact is what people run, so it is what gets tested. Every archive's
+  # checksum is verified on both runners, and the archive matching each runner is
+  # unpacked and exercised end to end. darwin/amd64 and linux/arm64 have no runner
+  # here, so they are checked but never executed; the README and ADR 0008 say so.
+  accept:
+    name: accept (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            archive: linux_amd64
+          - os: macos-latest
+            archive: darwin_arm64
+
+    steps:
+      # The acceptance script and its telemetry fixture live in the repository.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download the artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: axiom-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Verify the checksums
+        working-directory: dist
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c checksums.txt
+          else
+            shasum -a 256 -c checksums.txt
+          fi
+
+      - name: Unpack the archive
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          mkdir -p unpacked
+          tar -xzf "dist/axiom_${VERSION#v}_${{ matrix.archive }}.tar.gz" -C unpacked
+
+      - name: Check the packaged binary
+        run: ./scripts/release-check.sh unpacked/axiom "${{ needs.build.outputs.version }}"
+
+  # Only a tag can publish. A manual run leaves its artifacts on the workflow
+  # run, where they can be downloaded and tried without becoming a release.
+  publish:
+    name: publish
+    needs: [build, accept]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: axiom-${{ needs.build.outputs.version }}
+          path: dist
+
+      # The release is created as a draft: the artifacts and their checksums are
+      # produced by this run, and the notes that say what the version means are
+      # written by a person before it goes out.
+      #
+      # --prerelease is deliberately not passed. A 0.x version already says the
+      # interface may move, while the prerelease flag tells tooling this is not
+      # the current version, which is the opposite of the point of publishing it.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          Download the archive for your platform. `checksums.txt` lists all four
+          archives, so verify the line for the one you downloaded:
+
+          ```
+          grep axiom_<version>_<os>_<arch>.tar.gz checksums.txt | shasum -a 256 -c
+          ```
+
+          On Linux, use `sha256sum -c` in place of `shasum -a 256 -c`. Then put the
+          binary on your PATH:
+
+          ```
+          tar -xzf axiom_<version>_<os>_<arch>.tar.gz
+          sudo mv axiom /usr/local/bin/
+          axiom init
+          ```
+
+          Or with Go:
+
+          ```
+          go install github.com/exequieldeferrari/axiom/cmd/axiom@VERSION
+          ```
+
+          Supported platforms are macOS and Linux on amd64 and arm64. See the
+          README for what this version does, what it does not claim, and the
+          Claude Code versions it was verified against.
+          NOTES
+          sed -i "s/@VERSION/@$VERSION/" notes.md
+          gh release create "$VERSION" \
+            dist/axiom_*.tar.gz \
+            dist/checksums.txt \
+            --draft \
+            --title "axiom $VERSION" \
+            --notes-file notes.md

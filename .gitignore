@@ -30,6 +30,10 @@ go.work.sum
 # env file
 .env
 
+# Claude Code's per-developer settings, which 'axiom init' writes into. Claude
+# Code only adds this to .git/info/exclude when it creates the file itself.
+.claude/settings.local.json
+
 # Editor/IDE
 # .idea/
 # .vscode/

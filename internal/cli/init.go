@@ -102,6 +102,11 @@ func runInstall(opts initOptions, exePath string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "\nClaude Code will export telemetry to %s\n", endpoint)
 			fmt.Fprint(stdout, "Run 'axiom observe' while you work to record it.\n")
 		}
+		// Claude Code loads settings once, at session start, so an install made
+		// during a session does nothing until the next one. Without this, the
+		// first thing a new user sees is a profile with no events in it.
+		fmt.Fprint(stdout, "\nClaude Code reads its settings when a session starts,\n"+
+			"so start a new session before expecting this to be active.\n")
 		if !opts.global {
 			fmt.Fprint(stdout, "\nNote: Claude Code only adds .claude/settings.local.json to your git excludes\n"+
 				"when it writes that file itself. Add it to .gitignore if you do not want it committed.\n")
@@ -123,11 +128,14 @@ func axiomPath() (string, error) {
 		exe = resolved
 	}
 
-	// `go run` builds into a temporary directory that is deleted on exit, so a
-	// hook pointing there would break as soon as this process ends.
+	// `go run` builds into a temporary directory, and an archive is often
+	// unpacked into one. Either is deleted eventually, and a hook pointing
+	// there breaks with it.
 	if tmp, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
 		if strings.HasPrefix(exe, tmp+string(os.PathSeparator)) {
-			return "", errors.New("axiom is running from a temporary build; run 'make build' and use ./bin/axiom instead")
+			return "", fmt.Errorf("axiom is running from a temporary directory (%s), which will be deleted;\n"+
+				"move the binary somewhere permanent, such as /usr/local/bin, and run 'axiom init' from there.\n"+
+				"In a source checkout, run 'make build' and use ./bin/axiom", exe)
 		}
 	}
 	return exe, nil
