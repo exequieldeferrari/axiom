@@ -10,6 +10,7 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/event"
 	"github.com/exequieldeferrari/axiom/internal/timeline"
 	"github.com/exequieldeferrari/axiom/internal/turns"
+	"github.com/exequieldeferrari/axiom/internal/work"
 )
 
 // stream builds an ordered event sequence the way the store would replay it.
@@ -158,7 +159,7 @@ func shape(r turns.Report) []string {
 	return out
 }
 
-func composition(c turns.Composition) []string {
+func composition(c work.Composition) []string {
 	var parts []string
 	for _, p := range []struct {
 		label string
@@ -190,7 +191,7 @@ func composition(c turns.Composition) []string {
 
 // outcomes renders the three states as "label:ok/failed/unestablished", which
 // keeps them visibly separate: none of the three may absorb another.
-func outcomes(label string, o turns.Outcomes) string {
+func outcomes(label string, o work.Outcomes) string {
 	if o.Total() == 0 {
 		return ""
 	}
@@ -208,7 +209,7 @@ func ordinals(epochs []int) []string {
 // total sums every category of a composition. The composition claims to
 // account for every recorded call, so a category added later without being
 // summed here would show up as calls that vanished.
-func total(c turns.Composition) int {
+func total(c work.Composition) int {
 	return c.WholeReads + c.RangedReads + c.Searches + c.Shell +
 		c.Writes.Total() + c.Edits.Total() + c.Launches.Total() + c.Uninterpreted
 }

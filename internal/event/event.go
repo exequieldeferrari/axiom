@@ -77,6 +77,7 @@ type ToolCall struct {
 	DurationMS   *int64        `json:"duration_ms,omitempty"`
 	Failure      *Failure      `json:"failure,omitempty"`
 	Metadata     *ToolMetadata `json:"metadata,omitempty"`
+	Result       *ToolResult   `json:"result,omitempty"`
 }
 
 // Failure describes why a tool call failed. The agent's error text is never
@@ -200,4 +201,42 @@ const (
 // SubagentOp describes spawning a nested agent.
 type SubagentOp struct {
 	Type string `json:"type,omitempty"`
+}
+
+// ToolResult holds privacy-filtered detail derived from what a tool returned.
+//
+// It is held apart from ToolMetadata, which is derived from what a tool was
+// given, so that the provenance of every stored value is legible from where it
+// sits: one side is what the agent asked for, the other is what came back. The
+// two are separate fields rather than one so that a future strict mode can drop
+// either without dropping the other.
+//
+// A tool's response is the largest and least structured thing a hook carries.
+// Nothing here is a general reading of one: exactly one value is extracted,
+// from one recognized shape, by the same allowlist discipline ToolMetadata uses.
+type ToolResult struct {
+	Subagent *SubagentResult `json:"subagent,omitempty"`
+}
+
+// SubagentResult is the identity an agent reported for the nested agent a
+// launch created.
+//
+// This is not Event.SubagentID, and the two must never be read as one value.
+// Event.SubagentID names the agent that MADE a call. AgentID here names the
+// agent a call CREATED. On one launch record they describe different agents:
+// a nested agent that launches another carries its own identity in
+// Event.SubagentID and the identity it created here.
+//
+// It exists so that the calls a launched agent went on to make can be
+// recognized as the ones that reported this identity. It establishes nothing
+// else: not that the agent did any work, not that the work it did was
+// recorded, and not that the launch achieved what it was asked for.
+type SubagentResult struct {
+	// AgentID is the agent's own opaque handle for the nested agent, stored
+	// verbatim and never parsed.
+	//
+	// Absence means no identity was recorded, which is what every record
+	// written before this field existed says, and what a launch that reported
+	// failing says. It never means that no agent existed.
+	AgentID string `json:"agent_id,omitempty"`
 }

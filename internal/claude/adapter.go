@@ -73,6 +73,7 @@ func toolCall(p *payload, outcome event.Outcome) *event.ToolCall {
 		Outcome:      outcome,
 		DurationMS:   p.DurationMS,
 		Metadata:     extractMetadata(p.ToolName, p.ToolInput),
+		Result:       extractResult(p.ToolName, p.ToolResponse),
 	}
 }
 

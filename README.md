@@ -561,11 +561,51 @@ delegated reports both, and they are not halves of one number:
 agent's identifier, which were observed carrying the launching turn too, which
 is why they are inside this turn at all.
 
-Neither is derived from the other, and nothing recorded connects a launch to a
-particular call. All four combinations occur: a nested agent need not run a
-tool, and a log that begins mid-turn holds nested calls with no launch in it,
-because a launch is recorded only once its call has returned. Adding the two
-together counts nothing meaningful.
+Neither is derived from the other. All four combinations occur: a nested agent
+need not run a tool, and a log that begins mid-turn holds nested calls with no
+launch in it, because a launch is recorded only once its call has returned.
+Adding the two together counts nothing meaningful.
+
+**A launch that returned an agent identity names the calls that reported it.**
+Claude returns an opaque identifier for the nested agent a launch creates, and
+the calls that agent goes on to make carry the same one. Where both were
+recorded, the turn describes each launch:
+
+```
+       Subagent launches             3  (1 reported failing)
+         subagent launch 1  ·  2 calls
+           1 whole-file read, 1 shell call
+         subagent launch 2
+           no calls recorded with its returned identity
+         1 launch with no returned agent identity recorded
+       Calls by a nested agent       3
+```
+
+The whole claim is *these recorded calls reported the same identity Claude
+returned for this launch*. It does not establish that everything the agent did
+reached the log, that the agent finished what it was asked, or anything about
+what it consumed. The three states above are deliberately distinct:
+
+- **a launch with work under it** — calls reporting its identity were recorded;
+- **no calls recorded with its returned identity** — a statement about the log,
+  not about the agent. A call rejected before it ran is never recorded, and a
+  log can end before the work reaches it;
+- **no returned agent identity recorded** — Axiom has nothing to match on. Every
+  launch recorded before Axiom persisted the identity says this, and so does one
+  that reported failing.
+
+The relation is the session and the returned identity, and nothing else — no
+timing, no ordering, no proximity. It deliberately does not use the turn: a
+background agent still running when the next prompt begins was observed
+recording work under a different turn identifier, and it still belongs to the
+launch that created it. The identity itself is never printed; it is what Axiom
+matched on, and it names nothing you can use.
+
+The per-launch counts are **not** a breakdown of *Calls by a nested agent*. That
+line counts every nested call in the turn, including work no recorded launch
+accounts for, which is reported at the end of the section and never assigned to
+a launch nearby. An ordinal may skip a number where the launch between two
+described ones returned no identity.
 
 Launches carry the same three outcomes as writes and edits, for a different
 reason: what the outcome settles is whether the delegation happened at all. A
