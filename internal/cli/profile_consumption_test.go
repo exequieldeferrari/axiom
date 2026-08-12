@@ -47,6 +47,21 @@ func turnOfRequests(t *testing.T, usage ...event.Usage) string {
 // the sentence a reader sees rather than as the lines it was printed on.
 func flat(out string) string { return strings.Join(strings.Fields(out), " ") }
 
+// findingsSection returns the part of a report below the findings heading.
+//
+// Consumption is reported in two places now: against the turns that recorded
+// work, and against the findings whose calls happened in them. An assertion
+// about one must not be satisfied by the other.
+func findingsSection(t *testing.T, out string) string {
+	t.Helper()
+
+	_, below, ok := strings.Cut(out, "\nFindings\n")
+	if !ok {
+		t.Fatalf("the report has no findings section:\n%s", out)
+	}
+	return below
+}
+
 // value returns what the report printed against a label.
 func value(t *testing.T, out, label string) string {
 	t.Helper()
@@ -91,7 +106,7 @@ func TestProfileReportsWhatTheTurnConsumed(t *testing.T) {
 		request("session-1", "turn-1", secondRequestTokens, micros(74085)),
 	)
 
-	out := profileOutput(t, dir)
+	out := findingsSection(t, profileOutput(t, dir))
 
 	if !strings.Contains(out, "Observed model consumption in the turn where this happened") {
 		t.Fatalf("the consumption block is missing:\n%s", out)
@@ -147,7 +162,7 @@ func TestProfileCountsAnAffectedTurnOnce(t *testing.T) {
 
 	dir := turnOfRequests(t, request("session-1", "turn-1", firstRequestTokens, micros(213915)))
 
-	out := profileOutput(t, dir)
+	out := findingsSection(t, profileOutput(t, dir))
 
 	if !strings.Contains(out, "Observed model consumption in the turn where this happened") {
 		t.Errorf("three calls in one turn were not counted as one turn:\n%s", out)
@@ -171,7 +186,7 @@ func TestProfileReportsEveryTurnAFindingSpans(t *testing.T) {
 		request("session-1", "turn-2", secondRequestTokens, micros(74085)),
 	)
 
-	out := profileOutput(t, dir)
+	out := findingsSection(t, profileOutput(t, dir))
 
 	if !strings.Contains(out, "Observed model consumption in the 2 turns where this happened") {
 		t.Fatalf("the turns the finding spans are wrong:\n%s", out)
@@ -195,7 +210,7 @@ func TestProfileReportsPartialCoverageAsCoverage(t *testing.T) {
 	)
 	seedUsage(t, dir, request("session-1", "turn-2", firstRequestTokens, micros(213915)))
 
-	out := profileOutput(t, dir)
+	out := findingsSection(t, profileOutput(t, dir))
 
 	if !strings.Contains(out, "Observed model consumption in 1 of the 3 turns where this happened") {
 		t.Fatalf("partial coverage is not reported as coverage:\n%s", out)
@@ -252,7 +267,7 @@ func TestProfileRepeatsASharedTurnForEachFinding(t *testing.T) {
 	)
 	seedUsage(t, dir, request("session-1", "turn-1", firstRequestTokens, micros(213915)))
 
-	out := profileOutput(t, dir)
+	out := findingsSection(t, profileOutput(t, dir))
 
 	if got := strings.Count(out, "Observed model consumption in the turn where this happened"); got != 2 {
 		t.Errorf("the shared turn appears %d times, want once per finding:\n%s", got, out)
@@ -277,7 +292,7 @@ func TestProfileOmitsConsumptionWithoutModelRequests(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			out := profileOutput(t, repeatedReadWithTelemetry(t, usage...))
+			out := findingsSection(t, profileOutput(t, repeatedReadWithTelemetry(t, usage...)))
 
 			if !strings.Contains(out, "Potentially redundant reads") {
 				t.Fatalf("the finding is missing:\n%s", out)
@@ -300,10 +315,10 @@ func TestProfileOmitsWithheldConsumption(t *testing.T) {
 	t.Run("counts", func(t *testing.T) {
 		t.Parallel()
 
-		out := profileOutput(t, turnOfRequests(t,
+		out := findingsSection(t, profileOutput(t, turnOfRequests(t,
 			request("session-1", "turn-1", firstRequestTokens, micros(213915)),
 			request("session-1", "turn-1", nil, micros(74085)),
-		))
+		)))
 
 		if got := value(t, out, "Model requests"); got != "2" {
 			t.Errorf("Model requests = %q, want 2", got)
@@ -319,10 +334,10 @@ func TestProfileOmitsWithheldConsumption(t *testing.T) {
 	t.Run("cost", func(t *testing.T) {
 		t.Parallel()
 
-		out := profileOutput(t, turnOfRequests(t,
+		out := findingsSection(t, profileOutput(t, turnOfRequests(t,
 			request("session-1", "turn-1", firstRequestTokens, micros(213915)),
 			request("session-1", "turn-1", secondRequestTokens, nil),
-		))
+		)))
 
 		if got := value(t, out, "Input tokens"); got != "8" {
 			t.Errorf("Input tokens = %q, want the counts both requests reported", got)
@@ -341,7 +356,7 @@ func TestProfileWithoutFindingsReportsNoConsumption(t *testing.T) {
 	dir := seed(t, readCall("session-1", "turn-1", "call-1", "/repo/notes.txt", at(0)))
 	seedUsage(t, dir, request("session-1", "turn-1", firstRequestTokens, micros(213915)))
 
-	out := profileOutput(t, dir)
+	out := findingsSection(t, profileOutput(t, dir))
 
 	if strings.Contains(out, "Observed model consumption") {
 		t.Errorf("consumption was reported without a finding:\n%s", out)

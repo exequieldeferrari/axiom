@@ -103,12 +103,15 @@ flowchart TD
     EventLog --> Timeline["Timeline<br/>sessions · context epochs"]
     Timeline --> Reacquire["Read again in a later epoch<br/>measurement, not a finding"]
     EventLog --> Reacquire
+    Timeline --> Turns["Recorded turns<br/>the work that named each turn"]
+    EventLog --> Turns
     EventLog --> Activity["Observed work<br/>composition · work by path"]
     EventLog --> Profiler["Profiler"]
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
     Profiler --> Failures["Repeated failed attempts"]
     Redundant --> Correlate["Correlation<br/>session · turn · invocation"]
     Failures --> Correlate
+    Turns --> Correlate
     UsageLog --> Correlate
     Correlate --> CLI["axiom profile"]
     Activity --> CLI
@@ -118,7 +121,7 @@ flowchart TD
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Timeline,Reacquire,Activity,Profiler,Redundant,Failures,Correlate,CLI built
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Timeline,Reacquire,Turns,Activity,Profiler,Redundant,Failures,Correlate,CLI built
     class Future planned
 ```
 
@@ -137,7 +140,7 @@ create one.
 The join answers two different questions and keeps them apart. A tool result
 belongs to one invocation, so it is attributed to it. A model request belongs to
 a turn, which other calls and requests may share, so it is reported as what was
-going on around a finding and never as its cost.
+observed in that turn and never as the cost of anything inside it.
 
 Everything below the canonical boundary is written against Axiom's own model,
 not against Claude Code. That is what makes a second agent an adapter rather
@@ -382,6 +385,30 @@ Context epochs
     2  opened by compact, ended with the session (clear)
        5 tool calls, 2 turns with work
 
+Recorded turns
+
+  session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
+    turn 1  ·  2026-08-10 20:25:04 → 20:26:41 UTC
+       Context epoch                 1
+       Tool calls                    6
+       Whole-file reads              3
+       Shell                         3
+       Observed model consumption    not recorded
+
+    turn 4  ·  2026-08-10 20:31:02 → 20:33:18 UTC
+       Context epochs                1, 2
+       Tool calls                    4
+       Whole-file reads              1
+       Shell                         2
+       Edits                         1
+       Observed model consumption
+         Model requests              7
+         Input tokens                1,159
+         Output tokens               296
+         Cache read                  141,158
+         Cache creation              25,461
+         Model cost                  $0.2016
+
 Observed operations
 
   File              8   read, written or edited; attributed by path below
@@ -401,10 +428,10 @@ Findings
   No redundant work or repeated failed attempts detected.
 ```
 
-The report answers three different questions in order: what the agent's context
-was, what work was observed and where it happened, and which of that work Axiom
-is prepared to judge. The captions each section prints are left out of this
-example.
+The report answers four different questions in order: what the agent's context
+was, what belonged to each turn inside it, what work was observed and where it
+happened, and which of that work Axiom is prepared to judge. The captions each
+section prints, and three of the five turns, are left out of this example.
 
 A quiet findings section is a real result. Axiom would rather miss redundant work
 than invent it, so it only reports repetition it can justify:
@@ -474,6 +501,55 @@ $ axiom profile --session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
 
 The match is exact — a prefix selects nothing — and the report says what it was
 scoped to. Without the flag, the whole log is analyzed, exactly as before.
+
+### Recorded turns
+
+A **turn** is the execution context an agent labels with an identifier of its
+own, and which several tool calls and several model requests may share. This
+section answers one question: what recorded work and what recorded model
+consumption belonged to each one.
+
+**A turn is listed only where a tool call named it.** Turn identifiers also
+arrive on session starts and ends, and on usage records with no tool call behind
+them — a controlled capture produced both. A turn built from one of those would
+be a turn that did nothing, so Axiom does not create one. On that capture the
+difference was four turns rather than five.
+
+A turn identifier is the agent's own, so identity is the session plus the
+identifier. Two sessions naming the same one are two turns, turns are numbered
+within a session, and the numbering is the order their work was recorded — not a
+count of the agent's turns, since a turn that ran no tool has no number here.
+A tool call that named no turn is counted at the end of the section rather than
+assigned to the turn beside it.
+
+The time beside a turn is the earliest and latest recorded on its calls. It is
+not how long the turn took, and nothing is ordered by it: membership and order
+come from the order records were appended. A turn whose work straddled a context
+reset names every epoch it reached; compaction has been observed opening a
+context in the middle of one.
+
+**Observed model consumption is what the agent reported for requests it labelled
+with that turn.** It is not the cost of the tool calls above it, not the cost of
+the turn, and not a billing figure — nothing recorded says which request served
+which call. A turn with none recorded says so: telemetry exists only while
+`axiom observe` is running, and an unmeasured turn is unknown, not free. Token
+counts and the cost estimate are each shown only when every observed request
+reported them, so a partial sum is never printed as a whole one.
+
+Two things sit outside a turn's total and are reported as such:
+
+- **Consumption under identifiers no tool call named.** The section says how many
+  requests belonged to how many such identifiers, and stops. It does not guess
+  why they exist, and it never folds them into a turn.
+- **What a subagent spent.** A nested agent's tool calls were observed carrying
+  the turn that launched them, while model requests around them carried
+  identifiers of their own. A turn's observed consumption therefore does not
+  contain everything a subagent launched from it spent.
+
+Turns are never ranked, and the section computes no ratios, averages, scores or
+recommendations. Claude Code's `Agent` calls currently reach Axiom without the
+metadata it needs to recognize a subagent spawn, so they appear as uninterpreted
+calls; the nested calls they produce are counted as subagent calls.
 
 ### Read again in a later context epoch
 

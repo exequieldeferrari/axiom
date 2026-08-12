@@ -16,6 +16,7 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/reacquire"
 	"github.com/exequieldeferrari/axiom/internal/store"
 	"github.com/exequieldeferrari/axiom/internal/timeline"
+	"github.com/exequieldeferrari/axiom/internal/turns"
 )
 
 // runProfile analyzes the recorded event log. It never writes to it.
@@ -98,6 +99,7 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 	})
 	t := timeline.New()
 	q := reacquire.New()
+	tn := turns.New()
 
 	analyzed := 0
 	for scanner.Scan() {
@@ -114,7 +116,9 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		// Epoch membership comes from the timeline as it observes the record,
 		// in the same pass, because append order is the only thing that
 		// establishes it.
-		q.Add(record, t.Add(record))
+		at := t.Add(record)
+		q.Add(record, at)
+		tn.Add(record, at)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -136,15 +140,20 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 	}
 
 	report := p.Report()
+	recorded := tn.Report()
+	measuredTurns, outside := usage.index.MeasureTurns(recorded.Turns)
 	writeReport(stdout, reportInput{
-		findings:  report,
-		activity:  a.Profile(),
-		context:   t.Report(),
-		reacquire: q.Report(),
-		measured:  usage.index.Measure(report.Findings),
-		stats:     scanner.Stats(),
-		usage:     usage,
-		scope:     opts,
+		findings:     report,
+		activity:     a.Profile(),
+		context:      t.Report(),
+		reacquire:    q.Report(),
+		measured:     usage.index.Measure(report.Findings),
+		turns:        measuredTurns,
+		outside:      outside,
+		unattributed: recorded.CallsOutsideTurns,
+		stats:        scanner.Stats(),
+		usage:        usage,
+		scope:        opts,
 	})
 	return nil
 }
@@ -229,9 +238,17 @@ type reportInput struct {
 	context   timeline.Report
 	reacquire reacquire.Report
 	measured  []correlate.Measured
-	stats     store.ScanStats
-	usage     usageLog
-	scope     profileOptions
+
+	// turns are the turns that recorded work, with what was observed under
+	// each. outside counts consumption observed under turn identities none of
+	// them holds, and unattributed the recorded calls that named no turn.
+	turns        []correlate.MeasuredTurn
+	outside      correlate.Outside
+	unattributed int
+
+	stats store.ScanStats
+	usage usageLog
+	scope profileOptions
 }
 
 func writeReport(w io.Writer, in reportInput) {
@@ -268,6 +285,7 @@ func writeReport(w io.Writer, in reportInput) {
 	}
 
 	writeTimeline(w, in.context)
+	writeTurns(w, in.turns, in.outside, in.unattributed)
 	writeReacquired(w, in.reacquire)
 	writeActivity(w, in.activity)
 

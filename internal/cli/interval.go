@@ -75,29 +75,36 @@ func category(w io.Writer, label string, n int) {
 
 // outcomes prints one category of file operation with what the record
 // establishes became of its calls.
+func outcomes(w io.Writer, label string, o profiler.Outcomes) {
+	if o.Total() == 0 {
+		return
+	}
+	associated(w, label, outcomeValue(o.Total(), o.Failed, o.Unestablished))
+}
+
+// outcomeValue renders a count of recorded calls with what became of them.
 //
 // The count is of calls recorded. What the record did not settle is named
 // beside it rather than folded into either outcome, because an outcome that
 // was never established is not a failure, and a call reported failing may
 // still have applied in part.
-func outcomes(w io.Writer, label string, o profiler.Outcomes) {
-	if o.Total() == 0 {
-		return
-	}
-
+//
+// The phrasing is shared by every section that reports outcomes this way, so
+// that two of them cannot come to describe the same three states differently.
+func outcomeValue(total, failed, unestablished int) string {
 	var qualified []string
-	if o.Failed > 0 {
-		qualified = append(qualified, fmt.Sprintf("%d reported failing", o.Failed))
+	if failed > 0 {
+		qualified = append(qualified, fmt.Sprintf("%d reported failing", failed))
 	}
-	if o.Unestablished > 0 {
-		qualified = append(qualified, fmt.Sprintf("%d with no outcome recorded", o.Unestablished))
+	if unestablished > 0 {
+		qualified = append(qualified, fmt.Sprintf("%d with no outcome recorded", unestablished))
 	}
 
-	value := strconv.Itoa(o.Total())
+	value := strconv.Itoa(total)
 	if len(qualified) > 0 {
 		value += "  (" + strings.Join(qualified, ", ") + ")"
 	}
-	associated(w, label, value)
+	return value
 }
 
 // writeIntervalPaths names the files a write or edit was recorded at.
