@@ -45,6 +45,8 @@ What works today:
 - Local append-only logs, one per stream
 - A profile of the observed work: what the execution consisted of, and the paths
   it happened at
+- The session identities in the log, and the context epochs recorded within them
+- The paths read again in a later context epoch of one session identity
 - Measured read bytes per path, when a receiver recorded them
 - A profiler that reports repeated shell commands and repeated file reads
 - Repeated failed attempts at the same shell command
@@ -54,6 +56,9 @@ What works today:
 Not built yet: repeated-search detection, recommendations, comparison between
 executions, and support for agents other than Claude Code. Axiom reports
 consumption it observed but does not attribute it, and makes no savings claims.
+Nothing observed across a context epoch boundary is measured in bytes, tokens or
+cost: a size printed beside it would read as the price of the boundary, which
+nothing recorded establishes.
 
 ### v0.1.0
 
@@ -94,6 +99,9 @@ flowchart TD
     Events --> EventLog["events.jsonl"]
     Usage --> UsageLog["usage.jsonl"]
 
+    EventLog --> Timeline["Timeline<br/>sessions · context epochs"]
+    Timeline --> Reacquire["Read again in a later epoch<br/>measurement, not a finding"]
+    EventLog --> Reacquire
     EventLog --> Activity["Observed work<br/>composition · work by path"]
     EventLog --> Profiler["Profiler"]
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
@@ -103,11 +111,13 @@ flowchart TD
     UsageLog --> Correlate
     Correlate --> CLI["axiom profile"]
     Activity --> CLI
+    Timeline --> CLI
+    Reacquire --> CLI
     UsageLog --> Activity
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Activity,Profiler,Redundant,Failures,Correlate,CLI built
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Timeline,Reacquire,Activity,Profiler,Redundant,Failures,Correlate,CLI built
     class Future planned
 ```
 
@@ -464,6 +474,81 @@ $ axiom profile --session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
 The match is exact — a prefix selects nothing — and the report says what it was
 scoped to. Without the flag, the whole log is analyzed, exactly as before.
 
+### Read again in a later context epoch
+
+The section after the epochs lists the paths a whole-file read succeeded on in
+more than one context epoch of **one** session identity:
+
+```
+Read again in a later context epoch
+
+  /repo/internal/profiler/profiler.go
+      session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
+      epoch 1, opened by startup, 1 read, no later write or edit recorded
+      epoch 3, opened by resume, 2 reads, later write or edit recorded
+```
+
+This is measurement, not a finding. It has no confidence level and no severity,
+because there is nothing to rule out: the reads happened, in those epochs, and
+that is the whole claim.
+
+It exists because it is the one thing neither other section can say. The
+profiler stops comparing at every recorded reset — after one, the agent may
+legitimately need the file again — so repetition that crosses a boundary is
+exactly what it declines to judge. The work-by-path profile counts the reads but
+aggregates over the whole log and knows nothing about boundaries. Before this,
+a file read once on either side of a boundary produced a line saying "2 reads",
+a findings section saying nothing, and no output relating the two.
+
+**What a line here does not say.** An epoch boundary is a structural boundary in
+the log. It is not proof that the agent's context was discarded — an epoch also
+ends where a session ends, which discards nothing — and it is not a claim that
+the later read was avoidable. Boundaries are a lower bound, so a boundary Axiom
+did not observe leaves the reads on either side of it looking like one epoch and
+reports no relation at all.
+
+**"Later write or edit recorded"** means a write or edit call at the same path
+was recorded after the read, in that epoch, and that the record establishes what
+became of that call. It is an ordering of two recorded operations, and it stops
+there. It does not say the file changed: a call the agent reported failing was
+still a call that was recorded, and whether it left anything behind is not
+observable — which is also why a failure counts here at all, since treating it
+as nothing would claim the opposite with the same confidence.
+
+It is not a reason the read happened either. Some background that is about the
+agent rather than about the line: Claude Code's edit tools refuse to modify a
+file that has not been read in the current context, which can make a prior read
+relevant to a later edit. Axiom does not conclude from that which reads were
+brought about by a boundary — in the capture behind this feature, an agent
+resumed and edited a file it had not read in that epoch at all.
+
+**"No later write or edit recorded"** means none was recorded. It is not
+evidence that the read achieved nothing.
+
+A write or edit whose outcome the record never established is not known to have
+run at all. It is reported as itself and counted as neither.
+
+The rules are the narrow ones:
+
+- Only successful whole-file reads count. Failed reads, reads whose outcome was
+  never established, and ranged reads are all excluded — a ranged read acquires
+  part of a file, which is not the same operation.
+- Several reads inside one epoch are one acquisition. Repetition within a single
+  context is the profiler's subject, under its own rules.
+- Path identity is the exact recorded string, with no normalization, so two
+  names for one file stay apart. That can only miss a relation, never invent one.
+- **Session identities are never compared.** A path read under two of them
+  appears here under neither, because nothing recorded links one identity to
+  another. This is deliberately blind to the most common repetition in a long
+  log.
+- A nested agent's reads are set aside and counted. A subagent reasons in a
+  context of its own, and these epochs are the session's.
+
+Three empty states are kept apart, because they mean different things: no
+session identity recorded more than one epoch (there was no boundary to look
+across), there were boundaries and nothing was read across one, and reads were
+set aside.
+
 ### Observed work
 
 The profile counts every tool call that reached the log, exactly once, and says
@@ -797,6 +882,10 @@ read:
 - **An execution is not observable.** Axiom can derive session identities,
   context epochs and turns, and none of them means "one attempt at one task".
   Comparing two runs needs a unit somebody asserts; Axiom does not invent one.
+- **A context epoch boundary is not proof that context was discarded.** It is a
+  boundary the log recorded. An epoch also ends where a session ends, which
+  discards nothing, and a reset the agent never reported leaves no boundary at
+  all — so boundaries, like tool call counts, are a lower bound.
 - **Durations exclude waiting on you.** Claude Code reports tool execution time,
   not the time spent in permission prompts.
 - **Recorded order only approximates execution order.** Hooks run as parallel

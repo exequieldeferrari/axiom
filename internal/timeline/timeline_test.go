@@ -81,6 +81,14 @@ func (s *stream) read(path string) *stream {
 	}})
 }
 
+func (s *stream) edit(path string) *stream {
+	return s.add(event.Event{Type: event.TypeToolCall, Tool: &event.ToolCall{
+		Name:     "Edit",
+		Outcome:  event.OutcomeSuccess,
+		Metadata: &event.ToolMetadata{File: &event.FileOp{Path: path, Access: event.AccessEdit}},
+	}})
+}
+
 // callWithoutTool is a tool_call record carrying no call, which a future or
 // broken writer could produce.
 func (s *stream) callWithoutTool() *stream {
@@ -494,6 +502,122 @@ func TestReportDoesNotConsumeTheTimeline(t *testing.T) {
 		tl.Add(ev)
 	}
 	assertShape(t, tl.Report(), "a: 1 startup→open c2 t1 s0")
+}
+
+// placements replays a stream and renders where each record was placed, one
+// entry per record in append order, so that a test can state the placement of a
+// whole sequence instead of walking it record by record.
+func placements(s *stream) []string {
+	tl := timeline.New()
+	out := make([]string, 0, len(s.events))
+	for _, ev := range s.events {
+		at := tl.Add(ev)
+		if !at.Placed {
+			out = append(out, "-")
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s/%d/%s", at.Epoch.SessionID, at.Epoch.Ordinal, opening(at.Opening)))
+	}
+	return out
+}
+
+func assertPlacements(t *testing.T, s *stream, want ...string) {
+	t.Helper()
+	if got := placements(s); !slices.Equal(got, want) {
+		t.Errorf("placements:\n got %v\nwant %v", got, want)
+	}
+}
+
+// A record is placed in the epoch it belongs to, as the state machine observes
+// it. A start belongs to the epoch it opens and an end to the epoch it closes,
+// which is what keeps an epoch that recorded no work observable as an epoch.
+func TestPlacementFollowsTheEpochs(t *testing.T) {
+	t.Parallel()
+
+	// The shape of the controlled capture: one identity, three epochs, the
+	// second opened by a resume after the first was ended.
+	s := newStream("a").
+		start("startup").inTurn("t1").read("/repo/notes.txt").end("other").
+		start("resume").inTurn("t2").edit("/repo/notes.txt").end("other").
+		start("resume").inTurn("t3").read("/repo/notes.txt")
+
+	assertPlacements(t, s,
+		"a/1/startup", "a/1/startup", "a/1/startup",
+		"a/2/resume", "a/2/resume", "a/2/resume",
+		"a/3/resume", "a/3/resume",
+	)
+	assertShape(t, derive(s),
+		"a: 1 startup→ended(other) c1 t1 s0 | 2 resume→ended(other) c1 t1 s0 | 3 resume→open c1 t1 s0")
+}
+
+// A record that belongs to no epoch must not be given one. Each of these is a
+// different kind of ignorance and none of them is a position in a session.
+func TestPlacementWithheldWhereThereIsNoEpoch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no session identity", func(t *testing.T) {
+		t.Parallel()
+		assertPlacements(t, newStream("").read("/repo/x.go"), "-")
+	})
+
+	t.Run("end with nothing open", func(t *testing.T) {
+		t.Parallel()
+		assertPlacements(t, newStream("a").end("clear"), "-")
+	})
+
+	t.Run("call carrying no call", func(t *testing.T) {
+		t.Parallel()
+		assertPlacements(t, newStream("a").start("startup").callWithoutTool(), "a/1/startup", "-")
+	})
+
+	t.Run("record this version cannot interpret", func(t *testing.T) {
+		t.Parallel()
+		assertPlacements(t, newStream("a").start("startup").unknownType(), "a/1/startup", "-")
+	})
+}
+
+// Work arriving for a session with no start opens an epoch marked as having
+// none, and the placement says exactly that rather than naming a source.
+func TestPlacementOfWorkWithNoStartRecorded(t *testing.T) {
+	t.Parallel()
+
+	assertPlacements(t, newStream("a").inTurn("t1").read("/repo/x.go").end("other"),
+		"a/1/absent", "a/1/absent")
+}
+
+// Placements and the report derive the ordinal the same way, so they cannot
+// drift apart however many epochs a session accumulates.
+func TestPlacementOrdinalsAgreeWithTheReport(t *testing.T) {
+	t.Parallel()
+
+	s := newStream("a").start("startup")
+	for range 4 {
+		s = s.start("compact")
+	}
+	s = s.as("b").start("clear")
+
+	assertPlacements(t, s, "a/1/startup", "a/2/compact", "a/3/compact", "a/4/compact", "a/5/compact", "b/1/clear")
+
+	tl := timeline.New()
+	for _, ev := range s.events {
+		tl.Add(ev)
+	}
+	for _, session := range tl.Report().Sessions {
+		for i, e := range session.Epochs {
+			if e.Ordinal != i+1 {
+				t.Errorf("session %s epoch %d has ordinal %d", session.ID, i+1, e.Ordinal)
+			}
+		}
+	}
+}
+
+// A source no version of Axiom has seen is carried through placement unchanged,
+// for the same reason the report shows it verbatim: nothing branches on it.
+func TestPlacementCarriesAnUnknownOpeningSource(t *testing.T) {
+	t.Parallel()
+
+	assertPlacements(t, newStream("a").start("teleport"), "a/1/teleport")
+	assertPlacements(t, newStream("a").start(""), "a/1/unspecified")
 }
 
 // The empty case has to be empty: an epoch nobody recorded is not an epoch.
