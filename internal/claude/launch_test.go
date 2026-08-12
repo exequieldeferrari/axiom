@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/exequieldeferrari/axiom/internal/crossread"
 	"github.com/exequieldeferrari/axiom/internal/delegation"
 	"github.com/exequieldeferrari/axiom/internal/event"
 	"github.com/exequieldeferrari/axiom/internal/work"
@@ -59,6 +60,83 @@ func TestTypelessLaunchRelatesToItsNestedWork(t *testing.T) {
 	if report.Unrelated.Calls != 0 {
 		t.Errorf("%d nested calls were left orphaned by a launch that accounts for them",
 			report.Unrelated.Calls)
+	}
+}
+
+// The same payload shapes, carried through to the reading they place in one
+// group.
+//
+// This drives the adapter, the delegation relation and the cross-scope
+// analysis together, from the hook payloads a capture produced rather than from
+// events written by hand: a launch the adapter fails to recognize, or an
+// identity it fails to read, would leave the reading below in three unrelated
+// scopes, and only a test that crosses the seam notices.
+//
+// The relation is established once, by internal/delegation, and consumed by
+// internal/crossread. That is the seam this asserts as much as the payloads:
+// the reading is grouped against the pairs delegation reported, and nothing
+// downstream reads a launch record a second time.
+//
+// The order is the one the capture produced for parallel agents: both launches,
+// then their work interleaved, with a synchronous agent's read reaching the log
+// before the launch that names it.
+func TestReadingAcrossLaunchedScopes(t *testing.T) {
+	t.Parallel()
+
+	const shared = "/repo/src/legacy.py"
+	d := delegation.New()
+	a := crossread.New()
+	for _, payload := range []string{
+		`{"hook_event_name":"PostToolUse","session_id":"abc","turn_id":"turn-1",
+			"tool_name":"Read","tool_use_id":"toolu_01","tool_input":{"file_path":"` + shared + `"}}`,
+		`{"hook_event_name":"PostToolUse","session_id":"abc","turn_id":"turn-1",
+			"agent_id":"ac21d414794fa0e11","tool_name":"Read","tool_use_id":"toolu_02",
+			"tool_input":{"file_path":"` + shared + `"}}`,
+		`{"hook_event_name":"PostToolUse","session_id":"abc","turn_id":"turn-1",
+			"tool_name":"Agent","tool_use_id":"toolu_03",
+			"tool_input":{"description":"read the module","prompt":"summarize it"},
+			"tool_response":{"status":"completed","agentId":"ac21d414794fa0e11"}}`,
+		`{"hook_event_name":"PostToolUse","session_id":"abc","turn_id":"turn-1",
+			"tool_name":"Task","tool_use_id":"toolu_04",
+			"tool_input":{"subagent_type":"explore","prompt":"look again"},
+			"tool_response":{"isAsync":true,"status":"async_launched","agentId":"bd32e525805fb1f22"}}`,
+		`{"hook_event_name":"PostToolUse","session_id":"abc","turn_id":"turn-2",
+			"agent_id":"bd32e525805fb1f22","tool_name":"Read","tool_use_id":"toolu_05",
+			"tool_input":{"file_path":"` + shared + `"}}`,
+	} {
+		ev := *ingest(t, payload)
+		d.Add(ev)
+		a.Add(ev)
+	}
+
+	established := d.Report()
+	if len(established.Relations) != 2 {
+		t.Fatalf("delegation established %d relations, want the two launches that returned an identity: %+v",
+			len(established.Relations), established.Relations)
+	}
+
+	report := a.Report(established)
+
+	if len(report.Paths) != 1 {
+		t.Fatalf("the report holds %d paths, want the one read in every scope: %+v",
+			len(report.Paths), report.Paths)
+	}
+	got := report.Paths[0]
+	if got.Path != shared || got.SessionID != "abc" {
+		t.Errorf("path = %q in session %q, want %q in \"abc\"", got.Path, got.SessionID, shared)
+	}
+	if len(got.Groups) != 1 {
+		t.Fatalf("the path is in %d groups, want the one fan-out that holds it", len(got.Groups))
+	}
+	if !got.Groups[0].Launcher.Root {
+		t.Errorf("the group is led by %+v, want the session scope", got.Groups[0].Launcher)
+	}
+	if len(got.Groups[0].Scopes) != 3 {
+		t.Errorf("%d scopes read it, want the session scope and both agents it launched",
+			len(got.Groups[0].Scopes))
+	}
+	if report.UnrelatedReads != 0 {
+		t.Errorf("%d reads were set aside from scopes a launch relates", report.UnrelatedReads)
 	}
 }
 

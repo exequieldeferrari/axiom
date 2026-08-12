@@ -18,7 +18,7 @@ func turnsSection(t *testing.T, out string) string {
 	if !ok {
 		t.Fatalf("the report has no turns section:\n%s", out)
 	}
-	above, _, ok := strings.Cut(below, "\nRead again in a later context epoch\n")
+	above, _, ok := strings.Cut(below, "\nRead across related agent scopes\n")
 	if !ok {
 		t.Fatalf("the turns section does not end:\n%s", out)
 	}

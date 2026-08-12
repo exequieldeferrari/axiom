@@ -333,6 +333,10 @@ if "$axiom" profile >"$out/profile.txt" 2>&1; then
 	have "reports the turns that recorded work" "$out/profile.txt" \
 		"Recorded turns" "A recorded turn is a turn identifier at least one recorded tool call named."
 	matches "reports the work of a turn" "$out/profile.txt" '^ +Tool calls +[0-9]'
+	# The fixture delegates nothing, so this section has to ship saying so
+	# rather than saying that related scopes read nothing in common.
+	have "distinguishes a log that delegated nothing" "$out/profile.txt" \
+		"Read across related agent scopes" "No recorded call handed work to a nested agent"
 	matches "reports what a turn was observed consuming" "$out/profile.txt" \
 		'^ +Model requests +[0-9]'
 	matches "counts the 3 file operations" "$out/profile.txt" '^  File +3 '

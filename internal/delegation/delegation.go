@@ -7,7 +7,18 @@
 //	returned for this recorded launch.
 //
 // That is an identity match on an opaque handle the agent itself put on both
-// records. It is not a claim that every operation the nested agent performed
+// records.
+//
+// The same records establish one other thing, which this package also owns
+// and reports beside the launches: which scope handed work to which. A launch
+// record carries the identity of the scope that made it and the identity it
+// returned, so it names a pair, and an analysis of how work moved between
+// scopes has to read that pair from here rather than from the event stream a
+// second time. What may establish a pair, and what may not, is one rule in
+// one place; an analysis built on top decides what to do with the pairs and
+// never what one is.
+//
+// Neither statement is a claim that every operation the nested agent performed
 // was recorded, that any model request belongs to it, that its cost is known,
 // that the launch caused anything else nearby, that it finished what it was
 // asked for, or that delegating was useful. None of that is recorded.
@@ -113,11 +124,47 @@ type Unrelated struct {
 	Agents int
 }
 
+// Relation is one delegation the record establishes: a launch recorded in one
+// scope that returned the identity of another.
+//
+// It is the same evidence the launches above are built from, stated from the
+// other side. A Launch says what the agent an identity names went on to do;
+// a Relation says which scope handed work to it. Both come from one record,
+// and holding them apart is what lets an analysis ask about the structure
+// without taking on the work under it.
+//
+// Nothing here is a graph. It is a flat list of the pairs one field of one
+// record established, and an analysis that wants more shape than that has to
+// build it from these and say so.
+type Relation struct {
+	SessionID string
+
+	// Launcher is the scope that made the launch call, taken from the
+	// record's own subagent identity. Empty is the session scope, which is
+	// the work recorded under no nested identity, and is never a missing
+	// value: a launch always has a scope that made it.
+	Launcher string
+
+	// AgentID is the identity the launch returned, which is the scope the
+	// work was handed to.
+	AgentID string
+}
+
 // Report is one pass of delegation derivation.
 type Report struct {
 	// Launches holds every recorded launch, in the order the launch records
 	// were appended, which is the only order a log establishes.
 	Launches []Launch
+
+	// Relations holds each distinct delegation the launches above
+	// established, in the order it was first established.
+	//
+	// A launch with no returned identity recorded contributes none: there is
+	// no scope to name. One returning the identity of the scope that made it
+	// contributes none either, since a scope handing work to itself is not a
+	// delegation and is not observable evidence of one. An identity returned
+	// twice is one relation, because the pair it names is one pair.
+	Relations []Relation
 
 	// Unrelated accounts for the nested work no launch above holds.
 	Unrelated Unrelated
@@ -139,7 +186,12 @@ type launch struct {
 	ref Ref
 	// identified says whether the record carried a returned identity, so
 	// that an empty one is never mistaken for one that was recorded.
-	identified   bool
+	identified bool
+	// launcher is the scope the launch call was recorded in, empty for the
+	// session scope. It takes no part in relating a launch to its nested
+	// work, and is kept because it is the other half of what the record
+	// establishes: which scope handed the work over.
+	launcher     string
 	turnID       string
 	invocationID string
 	outcome      event.Outcome
@@ -211,6 +263,7 @@ func (a *Accumulator) observe(ref Ref, ev event.Event) {
 func (a *Accumulator) open(ev event.Event) {
 	l := launch{
 		ref:          Ref{SessionID: ev.SessionID},
+		launcher:     ev.SubagentID,
 		turnID:       ev.TurnID,
 		invocationID: ev.Tool.InvocationID,
 		outcome:      ev.Tool.Outcome,
@@ -227,6 +280,7 @@ func (a *Accumulator) open(ev event.Event) {
 // accumulator: adding more events and reporting again is valid.
 func (a *Accumulator) Report() Report {
 	out := Report{Launches: make([]Launch, 0, len(a.launches))}
+	related := make(map[Relation]struct{}, len(a.launches))
 
 	for _, l := range a.launches {
 		out.Launches = append(out.Launches, Launch{
@@ -236,6 +290,12 @@ func (a *Accumulator) Report() Report {
 			Outcome:      l.outcome,
 			Work:         a.workFor(l),
 		})
+		if r, ok := relate(l); ok {
+			if _, seen := related[r]; !seen {
+				related[r] = struct{}{}
+				out.Relations = append(out.Relations, r)
+			}
+		}
 	}
 
 	for ref, n := range a.nested {
@@ -246,6 +306,25 @@ func (a *Accumulator) Report() Report {
 		out.Unrelated.Calls += n.calls
 	}
 	return out
+}
+
+// relate states which scope a launch handed work to, where the record
+// establishes one.
+//
+// A launch with no returned identity names no scope. A launch returning the
+// identity of the scope that made it names one scope twice, which is not a
+// delegation between two of them; the calls reporting that identity are still
+// related to the launch above, since that relation is about the identity and
+// not about the pair.
+func relate(l launch) (Relation, bool) {
+	if !l.identified || l.launcher == l.ref.AgentID {
+		return Relation{}, false
+	}
+	return Relation{
+		SessionID: l.ref.SessionID,
+		Launcher:  l.launcher,
+		AgentID:   l.ref.AgentID,
+	}, true
 }
 
 // workFor resolves what a launch's returned identity was observed doing.

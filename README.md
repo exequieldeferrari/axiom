@@ -105,6 +105,8 @@ flowchart TD
     EventLog --> Reacquire
     Timeline --> Turns["Recorded turns<br/>the work that named each turn"]
     EventLog --> Turns
+    EventLog --> CrossRead["Read across related agent scopes<br/>reading placed against delegation"]
+    CrossRead --> CLI
     EventLog --> Activity["Observed work<br/>composition · work by path"]
     EventLog --> Profiler["Profiler"]
     Profiler --> Redundant["Redundant work<br/>evidence-based findings"]
@@ -121,7 +123,7 @@ flowchart TD
 
     classDef built fill:#1f6feb,stroke:#1f6feb,color:#ffffff
     classDef planned fill:#f6f8fa,stroke:#8b949e,color:#57606a,stroke-dasharray:4 4
-    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Timeline,Reacquire,Turns,Activity,Profiler,Redundant,Failures,Correlate,CLI built
+    class Claude,Adapter,Telemetry,Events,Usage,EventLog,UsageLog,Timeline,Reacquire,Turns,CrossRead,Activity,Profiler,Redundant,Failures,Correlate,CLI built
     class Future planned
 ```
 
@@ -619,6 +621,67 @@ author-defined, and a failed launch declares one too.
 
 Turns are never ranked, and the section computes no ratios, averages, scores or
 recommendations.
+
+### Read across related agent scopes
+
+Under the turns, Axiom lists the paths a whole-file read succeeded on in more
+than one agent scope, where a recorded launch relates those scopes to each
+other:
+
+```
+Read across related agent scopes
+
+  /repo/internal/store/store.go
+      session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
+      the session scope and the agents it launched
+        the session scope, 2 reads
+        agent 1, 1 read
+        agent 2, 1 read
+
+1 path read in more than one related agent scope.
+```
+
+This is measurement, not a finding. Two agents reading one file is the ordinary
+shape of delegation, and the section counts it rather than judging it. It does
+not say either agent held what the other read, that one reading stood in for
+the other, or that the work could have been handed over differently.
+
+**A scope** is where a call was recorded. The *session scope* is the work
+carrying no agent identifier; each nested agent is a scope of its own. Agents
+are numbered within a session in the order the log first mentions them — the
+numbering is Axiom's, for reading the section, and names no agent outside it.
+The agent's own identifier is never printed.
+
+**A group** is one launching scope together with the scopes it launched
+directly, and a path is listed where more than one member of a group read it.
+That includes two agents launched by the same scope, which read the same file
+without either launching the other. The relation is followed no further than
+one step: a group that held every agent of a session would say nothing about
+why two scopes appear side by side, since almost all of them descend from the
+session scope.
+
+The relation comes only from a launch whose record carried the agent identity
+it returned. A launch with no identity recorded relates nothing, and a nested
+agent whose identity no recorded launch returned takes part in no group — its
+reads are counted at the end of the section rather than dropped. Timing,
+proximity, turn identifiers and tool names take no part in any of it.
+
+**Nothing here is an ordering.** A nested agent's work reaches the log before
+the launch that names it as often as after, so the section says a path was read
+in more than one related scope and never which read came first.
+
+The read rules are the ones the section above uses: only successful whole-file
+reads count, ranged reads and reads whose outcome was failed or never
+established are excluded, several reads in one scope are still one scope, and
+paths are compared as the exact recorded strings with no normalization.
+
+Context epochs take no part in this. An epoch is a boundary in the session's
+own reasoning; a delegated scope reasons separately whether or not a boundary
+was recorded, and the two questions are answered by two sections.
+
+Four empty states are kept apart: nothing handed work to a nested agent,
+launches were recorded and none carried a returned identity, related scopes
+recorded no qualifying read, and related scopes read nothing in common.
 
 ### Read again in a later context epoch
 
