@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Deliberately left on its defaults. It fails on a newly introduced known
       # vulnerable dependency and enforces no license policy, because this
