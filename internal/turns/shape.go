@@ -14,6 +14,7 @@ const (
 	shapeShell
 	shapeWrite
 	shapeEdit
+	shapeSubagentLaunch
 )
 
 // shapeOf reduces a tool call to the shape of the operation it carried.
@@ -23,13 +24,17 @@ const (
 // the timeline, and importing findings to count reads would tie a measurement
 // to the analysis that judges them. The duplication is a few lines and is
 // deliberate, in the same way the timeline derives context boundaries the
-// profiler also derives.
+// profiler also derives. Because it is duplication and not sharing, the two can
+// drift, and one of them did: a test holds them to the same table of shapes so
+// that the next divergence is a failure rather than a discrepancy between two
+// sections of one report.
 //
-// A subagent spawn has no shape of its own here. The current agent does not
-// report the metadata Axiom needs to recognize one, so such calls arrive
-// uninterpreted, and a category that is empty in every real log would say more
-// about Axiom than about the work. Nested calls are counted separately, by the
-// subagent identifier they carry.
+// A launch is recognized from the metadata the adapter derived and never from
+// the tool's name, which is the agent's own vocabulary and has already changed
+// once. It is the declaration that work was handed to a nested agent, and it is
+// not that agent's work: the calls the nested agent went on to make are counted
+// separately, by the subagent identifier they carry, and neither count is
+// derived from the other.
 //
 // The shape is independent of what became of the call. A count of reads is a
 // count of read calls that reached the log, not of files the agent can be shown
@@ -65,6 +70,9 @@ func shapeOf(t *event.ToolCall) shape {
 
 	case m.Search != nil:
 		return shapeSearch
+
+	case m.Subagent != nil:
+		return shapeSubagentLaunch
 
 	default:
 		return shapeUninterpreted

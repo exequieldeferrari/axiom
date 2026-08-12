@@ -46,7 +46,10 @@ type Ref struct {
 //
 // The three are kept apart for the reason they are kept apart everywhere else
 // in Axiom: an outcome that was never established is not a failure, and a
-// failed write may still have applied in part, so neither is it nothing.
+// failed write may still have applied in part, so neither is it nothing. The
+// same three states carry a second question for a launch, where what the
+// outcome settles is not what persisted but whether the delegation happened at
+// all.
 type Outcomes struct {
 	Succeeded     int
 	Failed        int
@@ -71,8 +74,10 @@ func (o *Outcomes) add(outcome event.Outcome) {
 //
 // The shapes are the ones Axiom's evidence model already distinguishes, and
 // every recorded call falls in exactly one of them, so the categories sum to
-// the turn's tool calls. Only writes and edits carry outcomes: what those leave
-// behind is the part of a turn that could have persisted.
+// the turn's tool calls. Writes, edits and launches carry outcomes, for two
+// different reasons: what a write or an edit leaves behind is the part of a
+// turn that could have persisted, while what a launch's outcome settles is
+// whether a nested agent was started at all.
 type Composition struct {
 	WholeReads  int
 	RangedReads int
@@ -81,11 +86,27 @@ type Composition struct {
 	Writes      Outcomes
 	Edits       Outcomes
 
+	// Launches counts the calls that declared work handed to a nested agent,
+	// by what the record established became of each.
+	//
+	// Only the succeeded ones establish that a launch call succeeded. A call
+	// reported failing declared a launch that the record says did not
+	// succeed, and is not a nested agent that started; one whose outcome was
+	// never established is neither, and stays apart from both.
+	//
+	// This counts launches and never the work a launched agent did, which
+	// Turn.SubagentCalls counts instead. Neither is derived from the other,
+	// and nothing recorded relates a launch to any particular later call.
+	Launches Outcomes
+
 	// Uninterpreted counts calls this composition does not place: a tool
-	// outside what the adapter extracts metadata for, input it could not
-	// read, and a subagent spawn, which the current agent does not report the
-	// metadata Axiom needs to recognize. A count here is Axiom's limit, not a
-	// call that did nothing.
+	// outside what the adapter extracts metadata for, and input it could not
+	// read. A count here is Axiom's limit, not a call that did nothing.
+	//
+	// A launch recorded before the adapter derived metadata for it is here
+	// too, and is not counted as a launch: the record carries no evidence
+	// that it was one, and reading it as one would answer from information
+	// the log never held.
 	Uninterpreted int
 }
 
@@ -103,6 +124,8 @@ func (c *Composition) add(t *event.ToolCall) {
 		c.Writes.add(t.Outcome)
 	case shapeEdit:
 		c.Edits.add(t.Outcome)
+	case shapeSubagentLaunch:
+		c.Launches.add(t.Outcome)
 	default:
 		c.Uninterpreted++
 	}
@@ -141,6 +164,15 @@ type Turn struct {
 	// calls were observed carrying the turn that launched the nested agent,
 	// which is why they are here at all, and are counted apart because a
 	// nested agent reasons in a context of its own.
+	//
+	// This is the work a nested agent did, and Composition.Launches is the
+	// declaration that one was asked for. They are separate measurements of
+	// separate records and neither is evidence for the other: a launch whose
+	// agent recorded no tool call is a launch with nothing here, and nested
+	// calls whose launch was never recorded — which a log that begins mid-turn
+	// produces, since a launch is recorded only once its call has returned —
+	// are counted here with no launch to match. Nothing recorded relates one
+	// of these calls to one of those launches.
 	SubagentCalls int
 }
 

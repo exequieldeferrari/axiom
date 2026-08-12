@@ -111,9 +111,18 @@ func (s *stream) search() *stream {
 	})
 }
 
-// spawn is the current agent's subagent call, which arrives with no metadata
-// Axiom can interpret.
-func (s *stream) spawn() *stream {
+// launch is a call the adapter recognized as handing work to a nested agent.
+// The tool is named for realism only: this package classifies on the metadata.
+func (s *stream) launch(outcome event.Outcome) *stream {
+	return s.tool("Agent", outcome, &event.ToolMetadata{
+		Subagent: &event.SubagentOp{Type: "general-purpose"},
+	})
+}
+
+// unrecordedLaunch is a subagent call carrying no metadata at all, which is
+// what a record written before an adapter derived any looks like. Nothing in it
+// says it was a launch, so nothing may read it as one.
+func (s *stream) unrecordedLaunch() *stream {
 	return s.tool("Agent", event.OutcomeSuccess, nil)
 }
 
@@ -170,6 +179,9 @@ func composition(c turns.Composition) []string {
 	if o := outcomes("edit", c.Edits); o != "" {
 		parts = append(parts, o)
 	}
+	if o := outcomes("launch", c.Launches); o != "" {
+		parts = append(parts, o)
+	}
 	if c.Uninterpreted > 0 {
 		parts = append(parts, fmt.Sprintf("uninterpreted:%d", c.Uninterpreted))
 	}
@@ -193,6 +205,26 @@ func ordinals(epochs []int) []string {
 	return out
 }
 
+// total sums every category of a composition. The composition claims to
+// account for every recorded call, so a category added later without being
+// summed here would show up as calls that vanished.
+func total(c turns.Composition) int {
+	return c.WholeReads + c.RangedReads + c.Searches + c.Shell +
+		c.Writes.Total() + c.Edits.Total() + c.Launches.Total() + c.Uninterpreted
+}
+
+// assertReconciles checks that every turn's categories add up to its calls.
+func assertReconciles(t *testing.T, r turns.Report) {
+	t.Helper()
+
+	for _, turn := range r.Turns {
+		if got := total(turn.Composition); got != turn.ToolCalls {
+			t.Errorf("turn %s/%s: categories account for %d of %d calls",
+				turn.SessionID, turn.TurnID, got, turn.ToolCalls)
+		}
+	}
+}
+
 func assertShape(t *testing.T, r turns.Report, want ...string) {
 	t.Helper()
 
@@ -214,19 +246,14 @@ func TestOneTurnOfSeveralOperations(t *testing.T) {
 		shell("digest-1").
 		write("/repo/c.go", event.OutcomeSuccess).
 		edit("/repo/a.go", event.OutcomeSuccess).
-		spawn())
+		launch(event.OutcomeSuccess).
+		unrecordedLaunch())
 
-	assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:8 "+
-		"whole:2 ranged:1 search:1 shell:1 write:1/0/0 edit:1/0/0 uninterpreted:1")
+	assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:9 "+
+		"whole:2 ranged:1 search:1 shell:1 write:1/0/0 edit:1/0/0 launch:1/0/0 uninterpreted:1")
 
-	// Every call falls in exactly one category, so the two agree. A category
-	// added without being counted here would show up as a call that vanished.
-	c := r.Turns[0].Composition
-	total := c.WholeReads + c.RangedReads + c.Searches + c.Shell +
-		c.Writes.Total() + c.Edits.Total() + c.Uninterpreted
-	if total != r.Turns[0].ToolCalls {
-		t.Errorf("composition totals %d of %d calls", total, r.Turns[0].ToolCalls)
-	}
+	// Every call falls in exactly one category, so the two agree.
+	assertReconciles(t, r)
 }
 
 // The three outcomes are counted apart. An outcome that was never established
@@ -425,11 +452,12 @@ func TestNestedCallsAreCountedAsTheTurnsAndAsNested(t *testing.T) {
 	t.Parallel()
 
 	r := analyze(newStream("session-1").start("startup").inTurn("turn-1").
-		spawn().
+		launch(event.OutcomeSuccess).
 		inSubagent("agent-1").read("/repo/a.go").shell("digest-1").
 		inSubagent("").read("/repo/b.go"))
 
-	assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:4 whole:2 shell:1 uninterpreted:1 sub:2")
+	assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:4 whole:2 shell:1 launch:1/0/0 sub:2")
+	assertReconciles(t, r)
 }
 
 // A tool this version cannot describe is counted as such rather than dropped.
@@ -441,13 +469,115 @@ func TestUninterpretedCalls(t *testing.T) {
 		tool("mcp__db__query", event.OutcomeSuccess, nil).
 		file("Read", event.OutcomeSuccess, &event.FileOp{Access: event.AccessRead}).
 		file("Chmod", event.OutcomeSuccess, &event.FileOp{Path: "/repo/a.go", Access: "chmod"}).
-		// A spawn an adapter did classify still has no category of its own
-		// here, which is the whole of what this version claims about one.
-		tool("Agent", event.OutcomeSuccess, &event.ToolMetadata{
-			Subagent: &event.SubagentOp{Type: "general-purpose"},
-		}))
+		// A record written before the adapter derived launch metadata says
+		// nothing about having been one, and is not read as one.
+		unrecordedLaunch())
 
 	assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:4 uninterpreted:4")
+	assertReconciles(t, r)
+}
+
+// A launch is recognized from the metadata the adapter derived, and what the
+// record established became of the call decides which of the three states it
+// lands in. None of them may absorb another: a call reported failing started no
+// nested agent, and one with no outcome recorded is not evidence that it did or
+// that it did not.
+func TestLaunchOutcomesAreKeptApart(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		outcome event.Outcome
+		want    string
+	}{
+		"succeeded":     {event.OutcomeSuccess, "launch:1/0/0"},
+		"failed":        {event.OutcomeFailure, "launch:0/1/0"},
+		"unestablished": {event.Outcome(""), "launch:0/0/1"},
+		"unknown state": {event.Outcome("pending"), "launch:0/0/1"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := analyze(newStream("session-1").start("startup").inTurn("turn-1").
+				launch(c.outcome))
+
+			assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:1 "+c.want)
+			assertReconciles(t, r)
+		})
+	}
+}
+
+// A recognized launch is no longer counted as a call this version cannot
+// describe, which is the defect this composition had: the adapter classified
+// these calls and the turn threw the classification away.
+func TestRecognizedLaunchIsNotUninterpreted(t *testing.T) {
+	t.Parallel()
+
+	r := analyze(newStream("session-1").start("startup").inTurn("turn-1").
+		launch(event.OutcomeSuccess).
+		launch(event.OutcomeFailure).
+		launch(event.Outcome("")))
+
+	assertShape(t, r, "session-1/turn-1 #1 epoch:1 calls:3 launch:1/1/1")
+	if got := r.Turns[0].Composition.Uninterpreted; got != 0 {
+		t.Errorf("%d recognized launches were counted as uninterpreted", got)
+	}
+}
+
+// Launches and the work a nested agent did are separate measurements of
+// separate records. Neither is derived from the other, and each occurs without
+// the other in real logs.
+func TestLaunchesAndNestedCallsAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		build func(*stream) *stream
+		want  string
+	}{
+		// A nested agent need not call a tool at all, so a launch can be
+		// recorded with nothing of its work beside it.
+		"a launch whose agent recorded no call": {
+			func(s *stream) *stream { return s.launch(event.OutcomeSuccess) },
+			"calls:1 launch:1/0/0",
+		},
+		// A launch is recorded only once its call returns, and its nested
+		// work is recorded before that, so a log that begins mid-turn holds
+		// the work with no launch to match.
+		"nested calls whose launch was never recorded": {
+			func(s *stream) *stream {
+				return s.inSubagent("agent-1").read("/repo/a.go").read("/repo/b.go")
+			},
+			"calls:2 whole:2 sub:2",
+		},
+		"both in one turn": {
+			func(s *stream) *stream {
+				return s.launch(event.OutcomeSuccess).
+					inSubagent("agent-1").read("/repo/a.go")
+			},
+			"calls:2 whole:1 launch:1/0/0 sub:1",
+		},
+		// Three launches and one nested call: the counts do not constrain
+		// each other in either direction.
+		"more launches than nested calls": {
+			func(s *stream) *stream {
+				return s.launch(event.OutcomeSuccess).
+					launch(event.OutcomeSuccess).
+					launch(event.OutcomeSuccess).
+					inSubagent("agent-1").read("/repo/a.go")
+			},
+			"calls:4 whole:1 launch:3/0/0 sub:1",
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := analyze(c.build(newStream("session-1").start("startup").inTurn("turn-1")))
+
+			assertShape(t, r, "session-1/turn-1 #1 epoch:1 "+c.want)
+			assertReconciles(t, r)
+		})
+	}
 }
 
 // Two runs over one log must not disagree, whatever order the maps inside

@@ -103,7 +103,10 @@ func TestProfileOmitsEmptyTurnCategories(t *testing.T) {
 		readIn("session-1", "turn-1", "/repo/a.go", at(time.Second)),
 	)))
 
-	for _, absent := range []string{"Ranged reads", "Searches", "Shell", "Writes", "Edits", "Subagent calls", "Uninterpreted"} {
+	for _, absent := range []string{
+		"Ranged reads", "Searches", "Shell", "Writes", "Edits",
+		"Subagent launches", "Calls by a nested agent", "Uninterpreted",
+	} {
 		if strings.Contains(out, absent) {
 			t.Errorf("a turn that recorded none printed %q:\n%s", absent, out)
 		}
@@ -333,9 +336,18 @@ func TestProfileStatesTheNestedAgentLimitation(t *testing.T) {
 	}
 }
 
+// launchIn is a call the adapter recognized as handing work to a nested agent,
+// carrying the outcome the record established for it.
+func launchIn(session, turn string, when time.Time, outcome event.Outcome) event.Event {
+	ev := subagentCall(session, turn, when)
+	ev.Tool.Outcome = outcome
+	return ev
+}
+
 // A nested agent's calls carry the turn that launched them, and are counted
-// both as the turn's work and as nested.
-func TestProfileCountsSubagentCallsInATurn(t *testing.T) {
+// both as the turn's work and as nested. The launch that declared the work and
+// the work itself are reported as two separate quantities.
+func TestProfileCountsLaunchesAndNestedCallsApart(t *testing.T) {
 	t.Parallel()
 
 	nested := readIn("session-1", "turn-1", "/repo/b.go", at(2*time.Second))
@@ -343,28 +355,126 @@ func TestProfileCountsSubagentCallsInATurn(t *testing.T) {
 
 	out := turnsSection(t, profileOutput(t, seed(t,
 		startEvent("session-1", "startup", at(0)),
-		subagentCall("session-1", "turn-1", at(time.Second)),
+		launchIn("session-1", "turn-1", at(time.Second), event.OutcomeSuccess),
 		nested,
 	)))
 
-	if !strings.Contains(out, "Tool calls                    2") {
-		t.Errorf("the nested call is not part of the turn:\n%s", out)
+	for _, want := range []string{
+		"Tool calls                    2",
+		"Subagent launches             1",
+		"Calls by a nested agent       1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the turn is missing %q:\n%s", want, out)
+		}
 	}
-	if !strings.Contains(out, "Subagent calls                1") {
-		t.Errorf("the nested call is not counted as nested:\n%s", out)
+	// The launch was classified, so it is no longer reported as a call this
+	// version cannot describe. That contradiction between two sections of one
+	// report is the defect this feature exists to remove.
+	if strings.Contains(out, "Uninterpreted") {
+		t.Errorf("a recognized launch was reported as uninterpreted:\n%s", out)
 	}
 }
 
-// The empirical capture this feature was built from: four turns of work in one
-// session and one epoch, with model requests recorded under three further
-// identities that no tool call named.
+// The report must not let a reader take the two subagent numbers for one
+// quantity, or read either as evidence for the other.
+func TestProfileDoesNotRelateLaunchesToNestedWork(t *testing.T) {
+	t.Parallel()
+
+	nested := readIn("session-1", "turn-1", "/repo/b.go", at(2*time.Second))
+	nested.SubagentID = "agent-1"
+
+	out := flat(turnsSection(t, profileOutput(t, seed(t,
+		startEvent("session-1", "startup", at(0)),
+		launchIn("session-1", "turn-1", at(time.Second), event.OutcomeSuccess),
+		nested,
+	))))
+
+	for _, want := range []string{
+		"Neither is derived from the other",
+		"nothing recorded connects a launch to a particular call",
+		"nested calls appear with no launch beside them",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the section does not hold the two counts apart, missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A turn that recorded neither says nothing about either, rather than
+// explaining a distinction that is not on the page.
+func TestProfileOmitsTheDelegationCaveatWithoutDelegation(t *testing.T) {
+	t.Parallel()
+
+	out := flat(turnsSection(t, profileOutput(t, seed(t,
+		startEvent("session-1", "startup", at(0)),
+		readIn("session-1", "turn-1", "/repo/a.go", at(time.Second)),
+	))))
+
+	if strings.Contains(out, "Subagent launches counts calls") {
+		t.Errorf("a turn with no delegation explained one:\n%s", out)
+	}
+}
+
+// A launch call that failed started no nested agent, and one whose outcome was
+// never recorded settles nothing. Both are reported, and neither is reported as
+// a launch that happened.
+func TestProfileDistinguishesLaunchOutcomes(t *testing.T) {
+	t.Parallel()
+
+	out := turnsSection(t, profileOutput(t, seed(t,
+		startEvent("session-1", "startup", at(0)),
+		launchIn("session-1", "turn-1", at(time.Second), event.OutcomeSuccess),
+		launchIn("session-1", "turn-1", at(2*time.Second), event.OutcomeFailure),
+		launchIn("session-1", "turn-1", at(3*time.Second), event.Outcome("")),
+	)))
+
+	want := "Subagent launches             3  (1 reported failing, 1 with no outcome recorded)"
+	if !strings.Contains(out, want) {
+		t.Errorf("the launch outcomes are not held apart, want %q:\n%s", want, out)
+	}
+	// The width of the report is not asserted here. A turn qualifying both
+	// states on one line runs past it, which Writes and Edits have done since
+	// they gained outcomes: the length comes from the shared rendering and the
+	// label contributes none of it. Narrowing it is a change to that
+	// convention everywhere it is used, and not part of this one.
+}
+
+// A record written with no launch metadata says nothing about having been a
+// launch, whatever the tool was called. It stays where it has always been.
+func TestProfileLeavesUnrecordedLaunchMetadataUninterpreted(t *testing.T) {
+	t.Parallel()
+
+	out := turnsSection(t, profileOutput(t, seed(t,
+		startEvent("session-1", "startup", at(0)),
+		opaqueCall("session-1", "turn-1", "Agent", at(time.Second)),
+	)))
+
+	if !strings.Contains(out, "Uninterpreted                 1") {
+		t.Errorf("a record with no launch metadata was not counted as uninterpreted:\n%s", out)
+	}
+	if strings.Contains(out, "Subagent launches") {
+		t.Errorf("a record with no launch metadata was read as a launch:\n%s", out)
+	}
+}
+
+// The empirical capture this feature was built from: turns of work in one
+// session and one epoch, with model requests recorded under further identities
+// that no tool call named.
+//
+// The launch carries the metadata the adapter derives for one. ADR 0013 read
+// this capture as showing that Claude Code supplied none, and the raw-payload
+// investigation behind ADR 0014 falsified that: the payload carried
+// subagent_type and the adapter recorded it. The nested call is recorded before
+// the launch that produced it, as the capture had it, because a launch reaches
+// a hook only once its call has returned.
 func TestProfileReplaysTheValidationCapture(t *testing.T) {
 	t.Parallel()
 
 	const session = "5eff7948-a49b-459b-9884-e1bc6e47d627"
-	spawn := opaqueCall(session, "turn-3", "Agent", at(20*time.Second))
-	nested := readIn(session, "turn-3", "/proj/main.go", at(21*time.Second))
+	nested := readIn(session, "turn-3", "/proj/main.go", at(20*time.Second))
 	nested.SubagentID = "agent-1"
+	spawn := launchIn(session, "turn-3", at(21*time.Second), event.OutcomeSuccess)
 
 	dir := seed(t,
 		startEvent(session, "startup", at(0)),
@@ -372,8 +482,8 @@ func TestProfileReplaysTheValidationCapture(t *testing.T) {
 		readIn(session, "turn-1", "/proj/README.md", at(2*time.Second)),
 		shellIn(session, "turn-1", "digest-1", at(3*time.Second)),
 		shellIn(session, "turn-2", "digest-2", at(10*time.Second)),
-		spawn,
 		nested,
+		spawn,
 		endEvent(session, "clear", at(30*time.Second)),
 	)
 	seedUsage(t, dir,
@@ -390,13 +500,14 @@ func TestProfileReplaysTheValidationCapture(t *testing.T) {
 	if got := strings.Count(out, "    turn "); got != 3 {
 		t.Errorf("%d turns were listed, want the 3 that recorded work:\n%s", got, out)
 	}
-	if !strings.Contains(out, "Subagent calls                1") {
+	if !strings.Contains(out, "Calls by a nested agent       1") {
 		t.Errorf("the nested call is missing:\n%s", out)
 	}
-	// The agent's own spawn arrives with no metadata Axiom can classify, and
-	// is counted as what it is rather than as a category it cannot support.
-	if !strings.Contains(out, "Uninterpreted                 1") {
-		t.Errorf("the subagent spawn is not accounted for:\n%s", out)
+	if !strings.Contains(out, "Subagent launches             1") {
+		t.Errorf("the launch is not accounted for:\n%s", out)
+	}
+	if strings.Contains(out, "Uninterpreted") {
+		t.Errorf("the launch was counted as a call Axiom cannot describe:\n%s", out)
 	}
 	if !strings.Contains(flat(out), "2 model requests observed under 2 turn identifiers") {
 		t.Errorf("the consumption outside the recorded turns is missing:\n%s", out)
