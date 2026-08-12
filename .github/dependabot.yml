@@ -1,0 +1,31 @@
+version: 2
+
+updates:
+  # The workflows reference actions by major version, so the only update
+  # Dependabot can propose here is a major one. Those arrive in a single
+  # grouped pull request rather than one per action, and CI on that pull
+  # request is what proves the bump.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Axiom has no external Go modules today. This entry costs nothing while that
+  # remains true and starts working the moment a dependency is added. Compatible
+  # updates are grouped; a major is left on its own, because a major is a change
+  # to the code and not a routine bump.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    groups:
+      go-modules:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

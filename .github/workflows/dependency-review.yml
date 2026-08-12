@@ -1,0 +1,30 @@
+name: Dependency Review
+
+# Axiom depends on no external module today, so there is nothing to review yet.
+# This is here for the change that adds the first one: it diffs the base and
+# head dependency graphs and fails if the pull request introduces a dependency
+# with a known advisory. Dependabot reports a vulnerable dependency that is
+# already on main; this is the check that runs before it gets there.
+#
+# A pull request is the only event with two graphs to compare, so it is the only
+# trigger. It is kept out of CI so that supply chain is a check of its own
+# rather than one more reason the build is red.
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Deliberately left on its defaults. It fails on a newly introduced known
+      # vulnerable dependency and enforces no license policy, because this
+      # repository has not established one for it to enforce.
+      - name: Review the dependency changes
+        uses: actions/dependency-review-action@v5
