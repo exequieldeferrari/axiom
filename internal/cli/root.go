@@ -52,6 +52,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return reportUsage(stderr, runObserve(args[2:], stdout))
 	case "profile":
 		return reportUsage(stderr, runProfile(args[2:], stdout))
+	case "compare":
+		return reportUsage(stderr, runCompare(args[2:], stdout))
 	default:
 		err := &UsageError{Msg: fmt.Sprintf("unknown command %q", cmd)}
 		fmt.Fprintf(stderr, "axiom: %v\n\n", err)
@@ -80,6 +82,7 @@ Commands:
   uninstall   Remove the Claude Code integration
   observe     Record agent telemetry while you work
   profile     Analyze recorded events and report what they establish
+  compare     Report how two recorded captures differ
   hook        Record an agent event (invoked by agent hooks, not by hand)
   help        Show this help message
   version     Print the axiom version

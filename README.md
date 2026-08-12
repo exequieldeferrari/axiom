@@ -63,9 +63,13 @@ What works today:
 - The tool calls recorded between a failed attempt and a later observed success
 - Measured tool output for redundant calls, when a receiver recorded it
 - The consumption observed in the turns a finding happened in
+- A comparison of how the recorded structure of two captures differs, where an
+  operator declares the two comparable
 
-Not built yet: repeated-search detection, recommendations, comparison between
-executions or configurations, and support for agents other than Claude Code.
+Not built yet: repeated-search detection, recommendations, and support for
+agents other than Claude Code. A comparison covers structure only: consumption,
+findings, paths and commands are not compared, and nothing about a difference is
+called an improvement or a regression.
 Axiom reports consumption it observed but does not attribute it, and makes no
 savings claims. Nothing observed across a context epoch boundary or across two
 agent scopes is measured in bytes, tokens or cost: a size printed beside it
@@ -272,6 +276,7 @@ axiom init --global      # install hooks for all your projects
 axiom init --telemetry   # also export Claude Code's telemetry to axiom
 axiom observe            # record that telemetry while you work
 axiom profile            # analyze recorded events
+axiom compare a b        # report how two recorded captures differ
 axiom uninstall          # remove the Claude Code integration
 ```
 
@@ -1063,6 +1068,121 @@ describing a smaller finding:
 
 The read still happened in three turns. Nothing is assumed about the two with
 no records, and nothing is shown as zero for them.
+
+## Comparing captures
+
+`axiom compare` reports how the recorded structure of two captures differs.
+
+```bash
+axiom compare /path/to/baseline /path/to/candidate
+```
+
+A **capture** is the records Axiom wrote into one data directory, narrowed to
+exactly one session identity, that *you* declare comparable to another capture.
+Axiom does not establish that two captures are the same task, that they are
+equivalent attempts at one, that either explains anything about the other, or
+that a difference is good or bad. Recording each one into its own
+`AXIOM_DATA_DIR` is what keeps them apart.
+
+Each side must resolve to one session identity. A directory holding more than
+one is refused, because Axiom cannot tell which of them you meant and adding
+them together would sum work recorded under identities that nothing links:
+
+```console
+$ axiom compare ./baseline ./candidate
+axiom: the baseline directory ./baseline holds more than one session identity, so Axiom cannot tell which one is the capture to compare:
+    5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+    7f2e1a3b-6c5d-4e3f-9a8b-1c2d3e4f5a6b
+  select one with --baseline-session <id>
+```
+
+```bash
+axiom compare ./baseline ./candidate --baseline-session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+```
+
+The report opens with the shape of each capture, so that every number below it
+can be read against how much of each side Axiom could see. Those rows carry no
+difference, because they are context rather than a result:
+
+```console
+Capture shape
+
+  baseline   /captures/baseline
+             session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+  candidate  /captures/candidate
+             session 7f2e1a3b-6c5d-4e3f-9a8b-1c2d3e4f5a6b
+
+                                                 baseline  candidate
+  Context epochs                                        1          1
+  Epochs with recorded work                             1          1
+  Recorded tool calls                                  16         20
+  Records skipped                                       0          0
+  Usage log                                        absent     absent
+```
+
+Then four blocks, each a signed count and nothing more:
+
+```console
+Recorded work by shape
+
+                                                 baseline  candidate   difference
+  Whole-file reads                                      6          6   same
+  Ranged reads                                          0          0   same
+  Searches                                              0          0   same
+  Shell                                                 4          9   +5
+  Writes                                                0          0   same
+      succeeded                                         0          0   same
+      failed                                            0          0   same
+      outcome not established                           0          0   same
+  Edits                                                 2          2   same
+      succeeded                                         2          2   same
+      failed                                            0          0   same
+      outcome not established                           0          0   same
+  Subagent launches                                     2          2   same
+      succeeded                                         2          2   same
+      failed                                            0          0   same
+      outcome not established                           0          0   same
+  Uninterpreted                                         2          1   -1
+
+Delegation
+
+                                                 baseline  candidate   difference
+  Launches recorded                                     2          2   same
+  Launches returning an agent identity                  2          2   same
+  Relations established                                 2          2   same
+  Launching scopes                                      1          1   same
+```
+
+The remaining two blocks report reading across related agent scopes and reading
+again in a later context epoch, each with the denominators that make a zero
+readable: no launch at all, launches that related no scope, and related scopes
+that read nothing in common are three different observations that all report no
+paths.
+
+### What a comparison does not say
+
+- **No score, rate, ranking or verdict.** A difference is the candidate's count
+  less the baseline's. Axiom never calls one capture better, worse, faster or
+  more efficient, and never says a change caused anything.
+- **Nothing about consumption.** Tokens, model requests and cost are not
+  compared. Whether a usage log exists is shown, because measurements exist only
+  for the time `axiom observe` was running, and an absent log is consumption
+  that was never recorded rather than consumption of none.
+- **No paths and no commands.** How many paths a relation held is compared; the
+  paths themselves are not, because each capture records its own absolute paths
+  and normalizing them would mean trusting a working directory Axiom never
+  observed. A command is recorded only as a digest of one exact string.
+- **No findings.** What the profiler treats as one run of repeated work ends at
+  every recorded context reset and at every agent scope, so the same repetition
+  counts differently depending on where those boundaries fell.
+- **Nothing is known to be stable.** Ten recordings of one delegation workload
+  held reads, edits, launches, relations and cross-scope paths at the same
+  values, while shell calls ranged from 3 to 9 and uninterpreted calls from 0 to
+  4 — the latter entirely Claude Code's own `ScheduleWakeup` while waiting on
+  parallel subagents. That is one workload on one machine, not a property of the
+  measurements. Shell and uninterpreted calls are still shown, because the
+  categories are every recorded call and hiding the ones that move would make
+  the rest look like the whole of the work.
 
 ## Where the data goes
 
