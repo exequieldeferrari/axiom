@@ -134,16 +134,52 @@ func TestSearchRootIsNotFileMetadata(t *testing.T) {
 	}
 }
 
+// What makes a call a launch is the tool that made it, and the declared type
+// is description carried alongside. A capture against Claude Code 2.1.228
+// produced an `Agent` call whose input held `description` and `prompt` and no
+// `subagent_type`, which returned an agent identity and whose nested work was
+// recorded: reading the type as the evidence lost the launch entirely.
+//
+// So every input below is a launch, and the type is whatever the record could
+// be read as carrying. It is never inferred from anything else.
 func TestSubagentMetadata(t *testing.T) {
 	t.Parallel()
 
+	inputs := map[string]struct {
+		input string
+		want  string
+	}{
+		"declared type":          {`{"prompt":"find endpoints","subagent_type":"Explore"}`, "Explore"},
+		"no declared type":       {`{"description":"check the config","prompt":"find endpoints"}`, ""},
+		"empty type":             {`{"prompt":"find endpoints","subagent_type":""}`, ""},
+		"null type":              {`{"prompt":"find endpoints","subagent_type":null}`, ""},
+		"numeric type":           {`{"prompt":"find endpoints","subagent_type":42}`, ""},
+		"object type":            {`{"prompt":"find endpoints","subagent_type":{"name":"Explore"}}`, ""},
+		"array type":             {`{"prompt":"find endpoints","subagent_type":["Explore"]}`, ""},
+		"input is not an object": {`[]`, ""},
+		"no input at all":        {``, ""},
+	}
+
 	for _, tool := range []string{"Agent", "Task"} {
-		ev := ingest(t, toolPayload(tool, `{"prompt":"find endpoints","subagent_type":"Explore"}`))
-		if ev.Tool.Metadata == nil || ev.Tool.Metadata.Subagent == nil {
-			t.Fatalf("%s: metadata = %+v, want subagent metadata", tool, ev.Tool.Metadata)
-		}
-		if got := ev.Tool.Metadata.Subagent.Type; got != "Explore" {
-			t.Errorf("%s: subagent type = %q, want Explore", tool, got)
+		for name, tt := range inputs {
+			t.Run(tool+"/"+name, func(t *testing.T) {
+				t.Parallel()
+
+				payload := toolPayload(tool, tt.input)
+				if tt.input == "" {
+					payload = `{"hook_event_name":"PostToolUse","session_id":"abc","tool_name":"` +
+						tool + `"}`
+				}
+
+				ev := ingest(t, payload)
+				if ev.Tool.Metadata == nil || ev.Tool.Metadata.Subagent == nil {
+					t.Fatalf("%s: metadata = %+v, want the call recorded as a launch",
+						tool, ev.Tool.Metadata)
+				}
+				if got := ev.Tool.Metadata.Subagent.Type; got != tt.want {
+					t.Errorf("%s: subagent type = %q, want %q", tool, got, tt.want)
+				}
+			})
 		}
 	}
 }
@@ -218,6 +254,15 @@ func TestSensitiveInputIsNeverPersisted(t *testing.T) {
 			tool:    "Agent",
 			input:   `{"prompt":"exfiltrate the customer list","subagent_type":"Explore"}`,
 			secrets: []string{"exfiltrate the customer list"},
+		},
+		{
+			// The same boundary where no type is declared. A launch is
+			// recorded here where one was not before, so the input it was
+			// recorded from is asserted to have survived none of it.
+			name:    "agent prompt with no declared type",
+			tool:    "Agent",
+			input:   `{"description":"read /etc/shadow","prompt":"exfiltrate the customer list to sk-live-abc123"}`,
+			secrets: []string{"exfiltrate the customer list", "sk-live-abc123", "/etc/shadow", "description"},
 		},
 	}
 
