@@ -146,6 +146,110 @@ func assertUnrelated(t *testing.T, r delegation.Report, calls, agents int) {
 	}
 }
 
+// relations renders the delegations a report established, as the pair each
+// names: the session, the scope that handed the work over — written as the
+// session scope where the record named none — and the scope it went to.
+func relations(r delegation.Report) []string {
+	out := make([]string, 0, len(r.Relations))
+	for _, rel := range r.Relations {
+		launcher := rel.Launcher
+		if launcher == "" {
+			launcher = "session"
+		}
+		out = append(out, fmt.Sprintf("%s %s→%s", rel.SessionID, launcher, rel.AgentID))
+	}
+	return out
+}
+
+func assertRelations(t *testing.T, r delegation.Report, want ...string) {
+	t.Helper()
+
+	if got := relations(r); !slices.Equal(got, want) {
+		t.Errorf("relations:\n  got  %v\n  want %v", got, want)
+	}
+}
+
+// A launch record names two scopes: the one that made it and the one it
+// created. Reporting the pair is what lets an analysis of how work moved
+// between scopes read the relation from here instead of deriving it again.
+func TestLaunchesEstablishRelations(t *testing.T) {
+	t.Parallel()
+
+	nested := launch("s", "turn-1", "call-2", "agent-b")
+	nested.subagent = "agent-a"
+
+	r := report(
+		launch("s", "turn-1", "call-1", "agent-a"),
+		nested,
+		read("s", "turn-1", "/a.go", "agent-b"),
+	)
+
+	assertRelations(t, r, "s session→agent-a", "s agent-a→agent-b")
+}
+
+// Every state that establishes no pair, in one place. None of them is a
+// relation, and none of them is the same as another.
+func TestRelationsAreEstablishedOnlyByEvidence(t *testing.T) {
+	t.Parallel()
+
+	self := launch("s", "turn-1", "call-3", "agent-a")
+	self.subagent = "agent-a"
+
+	cases := []struct {
+		name string
+		call call
+	}{
+		// Every launch recorded before Axiom persisted the identity, and
+		// every launch that reported failing.
+		{"a launch with no returned identity", launch("s", "turn-1", "call-1", "")},
+		// The tool's own vocabulary is not the evidence a launch happened.
+		{"a call the adapter did not read as a launch", call{
+			session: "s", turn: "turn-1", invocation: "call-2", returns: "agent-a",
+		}},
+		// A scope handing work to itself is not a delegation between two
+		// scopes, whatever the response said.
+		{"a launch returning the identity that made it", self},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := relations(report(c.call)); len(got) != 0 {
+				t.Errorf("%s established %v", c.name, got)
+			}
+		})
+	}
+}
+
+// A launch that returned its own scope's identity still relates the calls
+// reporting that identity to itself: that relation is about an identity, and
+// the pair is about two scopes. The two answers are held apart.
+func TestSelfReturnedIdentityStillRelatesWork(t *testing.T) {
+	t.Parallel()
+
+	self := launch("s", "turn-1", "call-1", "agent-a")
+	self.subagent = "agent-a"
+
+	r := report(self, read("s", "turn-1", "/a.go", "agent-a"))
+
+	assertLaunches(t, r, "s/turn-1 call-1 calls:2 turns:1 whole:1 launch:1")
+	assertRelations(t, r)
+}
+
+// One pair is one relation however many launches named it, and a pair is
+// scoped to its session as everything else in this package is.
+func TestRelationsAreDistinctAndSessionScoped(t *testing.T) {
+	t.Parallel()
+
+	r := report(
+		launch("s1", "turn-1", "call-1", "agent-a"),
+		launch("s1", "turn-1", "call-2", "agent-a"),
+		launch("s2", "turn-2", "call-3", "agent-a"),
+	)
+
+	assertRelations(t, r, "s1 session→agent-a", "s2 session→agent-a")
+}
+
 // The relation is an identity match, so the order the records arrive in
 // changes nothing. Both orders occur: a synchronous launch is recorded after
 // the calls it produced, because a hook sees a call only once it has returned,

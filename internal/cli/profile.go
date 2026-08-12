@@ -12,6 +12,7 @@ import (
 
 	"github.com/exequieldeferrari/axiom/internal/activity"
 	"github.com/exequieldeferrari/axiom/internal/correlate"
+	"github.com/exequieldeferrari/axiom/internal/crossread"
 	"github.com/exequieldeferrari/axiom/internal/delegation"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/reacquire"
@@ -105,6 +106,10 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 	// for a report: a launch and the work it names arrive in either order,
 	// and both orders were observed.
 	dl := delegation.New()
+	// Reading across related scopes holds only per-scope acquisition counts,
+	// and is joined to the relations delegation established when the report
+	// is taken.
+	cr := crossread.New()
 
 	analyzed := 0
 	for scanner.Scan() {
@@ -125,6 +130,7 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		q.Add(record, at)
 		tn.Add(record, at)
 		dl.Add(record)
+		cr.Add(record)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -147,6 +153,10 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 
 	report := p.Report()
 	recorded := tn.Report()
+	// Taken once. The launches and the relations they established are one
+	// derivation, and the section below groups reading against the relations
+	// rather than deriving them a second time.
+	delegated := dl.Report()
 	measuredTurns, outside := usage.index.MeasureTurns(recorded.Turns)
 	writeReport(stdout, reportInput{
 		findings:     report,
@@ -157,7 +167,8 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		turns:        measuredTurns,
 		outside:      outside,
 		unattributed: recorded.CallsOutsideTurns,
-		delegation:   dl.Report(),
+		delegation:   delegated,
+		crossread:    cr.Report(delegated),
 		stats:        scanner.Stats(),
 		usage:        usage,
 		scope:        opts,
@@ -258,6 +269,11 @@ type reportInput struct {
 	// section, under the launches it describes.
 	delegation delegation.Report
 
+	// crossread reports the paths read in more than one agent scope that a
+	// recorded launch relates. It is a section of its own, under the turns
+	// where those launches are described.
+	crossread crossread.Report
+
 	stats store.ScanStats
 	usage usageLog
 	scope profileOptions
@@ -298,6 +314,7 @@ func writeReport(w io.Writer, in reportInput) {
 
 	writeTimeline(w, in.context)
 	writeTurns(w, in.turns, in.outside, in.unattributed, in.delegation)
+	writeCrossRead(w, in.crossread)
 	writeReacquired(w, in.reacquire)
 	writeActivity(w, in.activity)
 
