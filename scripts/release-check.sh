@@ -328,6 +328,13 @@ echo "Profile"
 if "$axiom" profile >"$out/profile.txt" 2>&1; then
 	have "reports the observed activity" "$out/profile.txt" \
 		"Observed operations" "Work by path"
+	# A turn exists in the report only because a tool call named it, and it
+	# carries both halves of what the section answers.
+	have "reports the turns that recorded work" "$out/profile.txt" \
+		"Recorded turns" "A recorded turn is a turn identifier at least one recorded tool call named."
+	matches "reports the work of a turn" "$out/profile.txt" '^ +Tool calls +[0-9]'
+	matches "reports what a turn was observed consuming" "$out/profile.txt" \
+		'^ +Model requests +[0-9]'
 	matches "counts the 3 file operations" "$out/profile.txt" '^  File +3 '
 	matches "counts the 3 shell operations" "$out/profile.txt" '^  Shell +3 '
 	have "attributes measured bytes to the path they were read from" "$out/profile.txt" \

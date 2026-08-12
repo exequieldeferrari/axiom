@@ -381,15 +381,17 @@ func TestProfileIsSilentAboutASuccessItNeverSaw(t *testing.T) {
 func TestProfileReportsFailuresWithoutTelemetry(t *testing.T) {
 	t.Parallel()
 
-	out := profileOutput(t, repeatedFailure(t))
+	whole := profileOutput(t, repeatedFailure(t))
+	out := findingsSection(t, whole)
 
 	if !strings.Contains(out, "Repeated failed attempt") {
 		t.Errorf("the finding needs telemetry it should not need:\n%s", out)
 	}
-	for _, absent := range []string{"Observed model consumption", "Warning"} {
-		if strings.Contains(out, absent) {
-			t.Errorf("output mentions %q with no usage log present:\n%s", absent, out)
-		}
+	if strings.Contains(out, "Observed model consumption") {
+		t.Errorf("the finding reports consumption with no usage log present:\n%s", out)
+	}
+	if strings.Contains(whole, "Warning") {
+		t.Errorf("output warns with no usage log present:\n%s", whole)
 	}
 }
 
