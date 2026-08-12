@@ -263,7 +263,9 @@ func TestErrorTextIsNeverPersisted(t *testing.T) {
 	}
 }
 
-// tool_response can be large and unstructured, and is never read.
+// tool_response can be large and unstructured. One field of one tool is read
+// out of it, and this is every other tool: a response Axiom has not reviewed
+// contributes nothing at all.
 func TestToolResponseIsIgnored(t *testing.T) {
 	t.Parallel()
 

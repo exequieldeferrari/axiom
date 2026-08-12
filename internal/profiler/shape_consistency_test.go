@@ -9,13 +9,19 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/turns"
 )
 
-// This file holds the two operation-shape classifiers to one table.
+// This file holds the two remaining operation-shape classifiers to one table.
 //
-// The profiler reduces a call to a shape for its intervals and internal/turns
-// does the same for a turn's composition. The two are duplicated rather than
-// shared, deliberately: turns may depend only on the event model and the
-// timeline, and importing the findings package to count reads would tie a
-// measurement to the analysis that judges it.
+// The profiler reduces a call to a shape for its intervals. Everything else
+// that asks the same question now shares one answer in internal/work, which
+// the turns side of this table drives: the duplicate that used to sit in
+// internal/turns was extracted there when a third consumer arrived, and the
+// two sides of this table are the shared classifier and the profiler's own.
+//
+// The profiler keeps its own because its categories are not the same set: an
+// interval counts operations rather than turns' compositions, and it is the
+// analysis that judges the work rather than a measurement of it. Sharing the
+// counting would tie one to the other; sharing the classification does not,
+// and that is the part this table pins.
 //
 // Duplication that is deliberate still drifts, and this one did. The turns
 // classifier was written without the subagent case the profiler had, so one

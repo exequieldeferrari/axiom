@@ -30,6 +30,7 @@ import (
 
 	"github.com/exequieldeferrari/axiom/internal/event"
 	"github.com/exequieldeferrari/axiom/internal/timeline"
+	"github.com/exequieldeferrari/axiom/internal/work"
 )
 
 // Ref identifies one turn.
@@ -40,95 +41,6 @@ import (
 type Ref struct {
 	SessionID string
 	TurnID    string
-}
-
-// Outcomes counts calls by what the record established became of them.
-//
-// The three are kept apart for the reason they are kept apart everywhere else
-// in Axiom: an outcome that was never established is not a failure, and a
-// failed write may still have applied in part, so neither is it nothing. The
-// same three states carry a second question for a launch, where what the
-// outcome settles is not what persisted but whether the delegation happened at
-// all.
-type Outcomes struct {
-	Succeeded     int
-	Failed        int
-	Unestablished int
-}
-
-// Total counts the calls recorded, whatever became of them.
-func (o Outcomes) Total() int { return o.Succeeded + o.Failed + o.Unestablished }
-
-func (o *Outcomes) add(outcome event.Outcome) {
-	switch outcome {
-	case event.OutcomeSuccess:
-		o.Succeeded++
-	case event.OutcomeFailure:
-		o.Failed++
-	default:
-		o.Unestablished++
-	}
-}
-
-// Composition is what the recorded calls of a turn were.
-//
-// The shapes are the ones Axiom's evidence model already distinguishes, and
-// every recorded call falls in exactly one of them, so the categories sum to
-// the turn's tool calls. Writes, edits and launches carry outcomes, for two
-// different reasons: what a write or an edit leaves behind is the part of a
-// turn that could have persisted, while what a launch's outcome settles is
-// whether a nested agent was started at all.
-type Composition struct {
-	WholeReads  int
-	RangedReads int
-	Searches    int
-	Shell       int
-	Writes      Outcomes
-	Edits       Outcomes
-
-	// Launches counts the calls that declared work handed to a nested agent,
-	// by what the record established became of each.
-	//
-	// Only the succeeded ones establish that a launch call succeeded. A call
-	// reported failing declared a launch that the record says did not
-	// succeed, and is not a nested agent that started; one whose outcome was
-	// never established is neither, and stays apart from both.
-	//
-	// This counts launches and never the work a launched agent did, which
-	// Turn.SubagentCalls counts instead. Neither is derived from the other,
-	// and nothing recorded relates a launch to any particular later call.
-	Launches Outcomes
-
-	// Uninterpreted counts calls this composition does not place: a tool
-	// outside what the adapter extracts metadata for, and input it could not
-	// read. A count here is Axiom's limit, not a call that did nothing.
-	//
-	// A launch recorded before the adapter derived metadata for it is here
-	// too, and is not counted as a launch: the record carries no evidence
-	// that it was one, and reading it as one would answer from information
-	// the log never held.
-	Uninterpreted int
-}
-
-func (c *Composition) add(t *event.ToolCall) {
-	switch shapeOf(t) {
-	case shapeWholeRead:
-		c.WholeReads++
-	case shapeRangedRead:
-		c.RangedReads++
-	case shapeSearch:
-		c.Searches++
-	case shapeShell:
-		c.Shell++
-	case shapeWrite:
-		c.Writes.add(t.Outcome)
-	case shapeEdit:
-		c.Edits.add(t.Outcome)
-	case shapeSubagentLaunch:
-		c.Launches.add(t.Outcome)
-	default:
-		c.Uninterpreted++
-	}
 }
 
 // Turn is one turn identifier that recorded tool work.
@@ -157,8 +69,12 @@ type Turn struct {
 
 	// ToolCalls counts the calls that named this turn, and Composition says
 	// what they were. The two agree by construction.
+	//
+	// Composition.Launches counts the calls that handed work to a nested
+	// agent. It is not SubagentCalls below, and neither is derived from the
+	// other.
 	ToolCalls   int
-	Composition Composition
+	Composition work.Composition
 
 	// SubagentCalls counts how many of those calls a nested agent made. The
 	// calls were observed carrying the turn that launched the nested agent,
@@ -230,7 +146,7 @@ type turnWork struct {
 	seen        map[int]struct{}
 
 	calls       int
-	composition Composition
+	composition work.Composition
 	subagent    int
 }
 
@@ -279,7 +195,7 @@ func (a *Accumulator) open(ref Ref) *turnWork {
 func (w *turnWork) observe(ev event.Event, epoch int) {
 	w.mark(ev.Timestamp)
 	w.calls++
-	w.composition.add(ev.Tool)
+	w.composition.Add(ev.Tool)
 	if ev.SubagentID != "" {
 		w.subagent++
 	}

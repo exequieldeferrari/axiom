@@ -12,6 +12,7 @@ import (
 
 	"github.com/exequieldeferrari/axiom/internal/activity"
 	"github.com/exequieldeferrari/axiom/internal/correlate"
+	"github.com/exequieldeferrari/axiom/internal/delegation"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/reacquire"
 	"github.com/exequieldeferrari/axiom/internal/store"
@@ -100,6 +101,10 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 	t := timeline.New()
 	q := reacquire.New()
 	tn := turns.New()
+	// Delegation is fed every record and resolves nothing until it is asked
+	// for a report: a launch and the work it names arrive in either order,
+	// and both orders were observed.
+	dl := delegation.New()
 
 	analyzed := 0
 	for scanner.Scan() {
@@ -119,6 +124,7 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		at := t.Add(record)
 		q.Add(record, at)
 		tn.Add(record, at)
+		dl.Add(record)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -151,6 +157,7 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		turns:        measuredTurns,
 		outside:      outside,
 		unattributed: recorded.CallsOutsideTurns,
+		delegation:   dl.Report(),
 		stats:        scanner.Stats(),
 		usage:        usage,
 		scope:        opts,
@@ -246,6 +253,11 @@ type reportInput struct {
 	outside      correlate.Outside
 	unattributed int
 
+	// delegation relates the recorded launches to the nested calls that
+	// reported the identity each returned. It is shown inside the turns
+	// section, under the launches it describes.
+	delegation delegation.Report
+
 	stats store.ScanStats
 	usage usageLog
 	scope profileOptions
@@ -285,7 +297,7 @@ func writeReport(w io.Writer, in reportInput) {
 	}
 
 	writeTimeline(w, in.context)
-	writeTurns(w, in.turns, in.outside, in.unattributed)
+	writeTurns(w, in.turns, in.outside, in.unattributed, in.delegation)
 	writeReacquired(w, in.reacquire)
 	writeActivity(w, in.activity)
 

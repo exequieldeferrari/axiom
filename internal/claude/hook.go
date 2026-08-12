@@ -53,12 +53,17 @@ type payload struct {
 	Model  string `json:"model"`
 	Reason string `json:"reason"`
 
-	ToolName    string          `json:"tool_name"`
-	ToolInput   json.RawMessage `json:"tool_input"`
-	ToolUseID   string          `json:"tool_use_id"`
-	DurationMS  *int64          `json:"duration_ms"`
-	Error       string          `json:"error"`
-	IsInterrupt bool            `json:"is_interrupt"`
+	ToolName  string          `json:"tool_name"`
+	ToolInput json.RawMessage `json:"tool_input"`
+	ToolUseID string          `json:"tool_use_id"`
+	// ToolResponse is what the tool returned. It is held as raw bytes and
+	// read by exactly one allowlisted extraction, which takes a single
+	// opaque identifier out of a launch's response and nothing else. It is
+	// never decoded as a whole and never reaches an event.
+	ToolResponse json.RawMessage `json:"tool_response"`
+	DurationMS   *int64          `json:"duration_ms"`
+	Error        string          `json:"error"`
+	IsInterrupt  bool            `json:"is_interrupt"`
 }
 
 // decode reads one hook payload under a hard size limit.

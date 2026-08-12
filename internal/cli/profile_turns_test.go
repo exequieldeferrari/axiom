@@ -377,7 +377,8 @@ func TestProfileCountsLaunchesAndNestedCallsApart(t *testing.T) {
 }
 
 // The report must not let a reader take the two subagent numbers for one
-// quantity, or read either as evidence for the other.
+// quantity, or read either as evidence for the other. A launch that recorded
+// no returned identity relates to nothing, whatever was recorded beside it.
 func TestProfileDoesNotRelateLaunchesToNestedWork(t *testing.T) {
 	t.Parallel()
 
@@ -392,12 +393,16 @@ func TestProfileDoesNotRelateLaunchesToNestedWork(t *testing.T) {
 
 	for _, want := range []string{
 		"Neither is derived from the other",
-		"nothing recorded connects a launch to a particular call",
+		"adding them together counts nothing meaningful",
 		"nested calls appear with no launch beside them",
+		"1 launch with no returned agent identity recorded",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the section does not hold the two counts apart, missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "subagent launch 1") {
+		t.Errorf("a launch with no recorded identity was related to a call:\n%s", out)
 	}
 }
 
