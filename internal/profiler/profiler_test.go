@@ -71,12 +71,42 @@ func unestablished(state string) option {
 	return func(t *event.ToolCall) { t.Outcome = event.Outcome(state) }
 }
 
-// failing marks a call as failed with the failure the agent reported for it.
+// failing marks a call as failed with the failure the agent reported for it,
+// carrying no classification of that report. It is the shape of every record
+// written before adapters classified one, and stands for them in tests.
 func failing(digest string) option {
 	return func(t *event.ToolCall) {
 		t.Outcome = event.OutcomeFailure
 		t.Failure = &event.Failure{Kind: event.FailureKindError, Digest: digest}
 	}
+}
+
+// reported marks a call as failed with a report the adapter classified, which
+// is what a current adapter records. The digest stands for the report's exact
+// text: two calls given the same one reported the same string.
+func reported(digest string, as event.Reporting) option {
+	return func(t *event.ToolCall) {
+		t.Outcome = event.OutcomeFailure
+		t.Failure = &event.Failure{
+			Kind:      event.FailureKindError,
+			Digest:    digest,
+			Reporting: as,
+		}
+	}
+}
+
+// The three classified shapes, named as the captures they came from: a report
+// carrying more than the status, a report that was the status alone, and a
+// report the adapter could not place.
+func withDetail(digest string) option { return reported(digest, event.ReportingDetail) }
+func statusOnly(digest string) option { return reported(digest, event.ReportingStatusOnly) }
+func unreadable(digest string) option { return reported(digest, event.ReportingUnrecognized) }
+
+// untexted marks a call as failed with no report at all, which leaves nothing
+// to digest and nothing to compare against another attempt.
+func untexted(t *event.ToolCall) {
+	t.Outcome = event.OutcomeFailure
+	t.Failure = &event.Failure{Kind: event.FailureKindError, Reporting: event.ReportingNoText}
 }
 
 // exiting adds the status a failed call exited with.
@@ -193,8 +223,8 @@ func identity(f profiler.Finding) string {
 	if f.ObservedTotal != nil {
 		total = f.ObservedTotal.String()
 	}
-	return fmt.Sprintf("%s|%s|%s|%d|%d|%s|%s|%s|%s%s",
-		f.Kind, f.Confidence, f.SessionID, f.Occurrences, f.Redundant,
+	return fmt.Sprintf("%s|%s|%d|%d|%s|%s|%s|%s%s",
+		f.Kind, f.SessionID, f.Occurrences, f.Redundant,
 		f.First, f.Last, total, f.Path, f.CommandDigest)
 }
 
@@ -372,9 +402,6 @@ func TestRepeatedShellFinding(t *testing.T) {
 
 	if f.Kind != profiler.KindRepeatedShell {
 		t.Errorf("Kind = %q", f.Kind)
-	}
-	if f.Confidence != profiler.ConfidenceHigh {
-		t.Errorf("Confidence = %q", f.Confidence)
 	}
 	if f.SessionID != "session-1" {
 		t.Errorf("SessionID = %q", f.SessionID)

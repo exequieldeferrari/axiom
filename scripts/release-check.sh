@@ -340,12 +340,17 @@ if "$axiom" profile >"$out/profile.txt" 2>&1; then
 	have "reports the repeated failure" "$out/profile.txt" "Repeated failed attempt"
 	matches "counts the failed attempts" "$out/profile.txt" 'Failed attempts +3'
 	matches "names the exit code the attempts shared" "$out/profile.txt" 'Same exit code +1'
+	# The two say different things about the reports and neither grades the
+	# finding, so both have to survive packaging.
+	matches "says what the attempts reported" "$out/profile.txt" \
+		'Failure reporting +detail beyond status, every attempt'
+	matches "says whether the reports were the same" "$out/profile.txt" 'Reports +identical'
 	have "reports what the model consumed in those turns" "$out/profile.txt" \
 		"Observed model consumption" "Model requests"
 	have "keeps the findings' language within the evidence" "$out/profile.txt" \
 		"2 findings" \
 		"with no agent modification observed in between" \
-		"each reporting the same observed failure"
+		"in one turn, with only read-only operations in between"
 else
 	bad "'axiom profile' failed: $(cat "$out/profile.txt")"
 fi

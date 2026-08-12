@@ -32,7 +32,6 @@ func toolResult(session, turn, invocation string, size *int64) event.Usage {
 func repeatedRead(session string, calls ...profiler.Call) profiler.Finding {
 	return profiler.Finding{
 		Kind:        profiler.KindRepeatedRead,
-		Confidence:  profiler.ConfidenceHigh,
 		SessionID:   session,
 		Occurrences: len(calls),
 		Redundant:   len(calls) - 1,

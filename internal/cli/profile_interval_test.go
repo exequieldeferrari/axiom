@@ -25,7 +25,7 @@ func editCall(session, turn, path string, when time.Time, opts ...func(*event.To
 func block(t *testing.T, out string) string {
 	t.Helper()
 
-	_, rest, ok := strings.Cut(out, "         Recorded before the later success\n")
+	_, rest, ok := strings.Cut(out, findingIndent+"Recorded before the later success\n")
 	if !ok {
 		t.Fatalf("no interval under the finding:\n%s", out)
 	}
@@ -51,13 +51,13 @@ func TestProfileReportsWhatWasRecordedBeforeTheLaterSuccess(t *testing.T) {
 	))
 
 	want := strings.Join([]string{
-		"           Operations recorded             4",
-		"           Whole-file reads                2",
-		"           Edits                           1",
-		"           Unrecognized                    1",
-		"           Writes or edits recorded at",
-		"             /repo/status.txt",
-		"           Turn boundary                   none recorded",
+		"      Operations recorded             4",
+		"      Whole-file reads                2",
+		"      Edits                           1",
+		"      Unrecognized                    1",
+		"      Writes or edits recorded at",
+		"        /repo/status.txt",
+		"      Turn boundary                   none recorded",
 	}, "\n") + "\n"
 
 	if got := block(t, out); got != want {
@@ -84,8 +84,8 @@ func TestProfileReportsAnEmptyIntervalExplicitly(t *testing.T) {
 	out := profileOutput(t, repeatedFailure(t,
 		succeeds("session-1", "turn-1", "call-4", at(3*time.Second))))
 
-	want := "           No tool operation was recorded between them.\n" +
-		"           Turn boundary                   none recorded\n"
+	want := "      No tool operation was recorded between them.\n" +
+		"      Turn boundary                   none recorded\n"
 	if got := block(t, out); got != want {
 		t.Errorf("interval rendered as\n%s\nwant\n%s", got, want)
 	}
@@ -179,7 +179,7 @@ func TestProfileBoundsThePathsItShowsWithoutShorteningTheInterval(t *testing.T) 
 		t.Errorf("the paths left out are not accounted for:\n%s", interval)
 	}
 	for _, want := range []string{"a.go", "e.go"} {
-		if !strings.Contains(interval, "             "+want+"\n") {
+		if !strings.Contains(interval, "        "+want+"\n") {
 			t.Errorf("interval is missing the path %q:\n%s", want, interval)
 		}
 	}

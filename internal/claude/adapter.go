@@ -76,38 +76,80 @@ func toolCall(p *payload, outcome event.Outcome) *event.ToolCall {
 	}
 }
 
+// failure records what the agent said about a call that did not succeed. The
+// error text itself is read here and kept nowhere: what survives it is a
+// digest, the exit status it declared, and how the report was classified.
 func failure(p *payload) *event.Failure {
 	f := &event.Failure{Kind: event.FailureKindError}
 	if p.IsInterrupt {
 		f.Kind = event.FailureKindInterrupt
 	}
-	if p.Error != "" {
-		f.Digest = digest.Error(p.Error)
-		if code, ok := parseExitCode(p.Error); ok {
-			f.ExitCode = &code
-		}
+	if p.Error == "" {
+		f.Reporting = event.ReportingNoText
+		return f
 	}
+
+	f.Digest = digest.Error(p.Error)
+	status, ok := recognizeStatus(p.Error)
+	if !ok {
+		f.Reporting = event.ReportingUnrecognized
+		return f
+	}
+	code := status.code
+	f.ExitCode = &code
+	f.Reporting = status.reporting()
 	return f
 }
 
-// parseExitCode reads the leading "Exit code N" line that Claude Code puts in
-// front of shell failures. The rest of the error string is documented as
+// reportedStatus is the exit status a failure report opened with and whatever
+// the agent reported after it.
+type reportedStatus struct {
+	code int
+	// rest is everything past the status line, and separated says whether
+	// there was anything past it to begin with. The two are held apart
+	// because a report that ended at the status and one that carried on into
+	// nothing are different observations.
+	rest      string
+	separated bool
+}
+
+// recognizeStatus reads the leading "Exit code N" line that Claude Code puts
+// in front of shell failures. The rest of the error string is documented as
 // display text with no stable format, so nothing else is parsed from it.
-func parseExitCode(errText string) (int, bool) {
-	line := errText
-	if i := strings.IndexByte(line, '\n'); i >= 0 {
-		line = line[:i]
-	}
+//
+// This is the only place the shape of a failure report is recognized. The exit
+// status and the reporting classification are both taken from one reading, so
+// the two can never drift into disagreeing about what was recognized.
+func recognizeStatus(errText string) (reportedStatus, bool) {
+	line, rest, separated := strings.Cut(errText, "\n")
 
 	const prefix = "Exit code "
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, prefix) {
-		return 0, false
+		return reportedStatus{}, false
 	}
 
 	code, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
 	if err != nil {
-		return 0, false
+		return reportedStatus{}, false
 	}
-	return code, true
+	return reportedStatus{code: code, rest: rest, separated: separated}, true
+}
+
+// reporting classifies what the report carried beyond the status it opened
+// with.
+//
+// A report that continued past the status into whitespace alone is a shape no
+// capture produced: Claude Code was observed trimming its output before
+// reporting it. Axiom will not decide between the two readings that shape
+// invites, so it declines to classify it. Sparse is never taken for empty.
+func (s reportedStatus) reporting() event.Reporting {
+	switch {
+	case !s.separated:
+		return event.ReportingStatusOnly
+	case strings.TrimSpace(s.rest) == "":
+		return event.ReportingUnrecognized
+	default:
+		return event.ReportingDetail
+	}
 }

@@ -115,7 +115,7 @@ func TestProfileReportsCleanSession(t *testing.T) {
 		"Events              3",
 		"Sessions analyzed   2",
 		"Tool calls          3",
-		"No high-confidence redundant work or repeated failed attempts detected.",
+		"No redundant work or repeated failed attempts detected.",
 		"scoped to a single session and subagent, and every recorded",
 	} {
 		if !strings.Contains(out, want) {
@@ -139,7 +139,6 @@ func TestProfileReportsRepeatedShell(t *testing.T) {
 	out := profileOutput(t, dir)
 
 	for _, want := range []string{
-		"HIGH",
 		"Repeated shell operation",
 		"session 7b4d3ab1",
 		"Executed 2 times, with only read-only operations in between",

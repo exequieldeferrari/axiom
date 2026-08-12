@@ -80,16 +80,72 @@ type ToolCall struct {
 }
 
 // Failure describes why a tool call failed. The agent's error text is never
-// stored; Digest exists so that identical failures can be grouped.
+// stored; Digest exists so that identical reports can be grouped, and
+// Reporting records what the adapter could establish about the text before it
+// was discarded.
 type Failure struct {
 	Kind     string `json:"kind"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Digest   string `json:"digest,omitempty"`
+	// Reporting is derived by the adapter while the report is still in hand.
+	// It is empty in every record written before the field existed, which
+	// means no classification was recorded and never that one was negative.
+	Reporting Reporting `json:"reporting,omitempty"`
 }
 
 const (
 	FailureKindError     = "error"
 	FailureKindInterrupt = "interrupt"
+)
+
+// Reporting is what an adapter could establish about the failure report an
+// agent handed it, derived at ingestion and recorded in place of the text.
+//
+// Every value describes the report and never the command behind it. Whether a
+// report carried anything is not whether the command produced anything: the
+// text is the agent's own summary of the call, whitespace-only output was
+// observed being stripped out of it before Axiom saw it, and a command can
+// write where no report describes.
+//
+// An empty value is not one of the states below. It means the record carries
+// no classification, which is what every record written before this field
+// existed says, and reading it as any of them would answer from evidence that
+// was never recorded.
+type Reporting string
+
+const (
+	// ReportingDetail means the report carried content beyond a recognized
+	// exit-status representation.
+	//
+	// It says nothing about what that content was, how much of it there was,
+	// where it came from, or whether it describes the failure at all. A
+	// command's ordinary output reaches a report the same way an error
+	// message does.
+	ReportingDetail Reporting = "detail"
+
+	// ReportingStatusOnly means the whole report was a recognized
+	// exit-status representation and nothing else.
+	//
+	// It establishes that the agent reported nothing beyond the status. It
+	// does not establish that the command was silent, that either output
+	// stream was empty, or that no description of the failure existed
+	// somewhere Axiom cannot see.
+	ReportingStatusOnly Reporting = "status_only"
+
+	// ReportingUnrecognized means a report was present and this adapter could
+	// not classify it. Failures outside the shell reach it, and so does a
+	// shell report in a shape the adapter does not know.
+	//
+	// It is the conservative outcome, and it is deliberately not
+	// ReportingStatusOnly: a report Axiom cannot read is not a report that
+	// said nothing.
+	ReportingUnrecognized Reporting = "unrecognized"
+
+	// ReportingNoText means the agent reported a failure and gave no text
+	// with it. It is held apart from a report that could not be classified,
+	// because reporting nothing and reporting something unreadable are
+	// different observations.
+	ReportingNoText Reporting = "no_text"
 )
 
 // ToolMetadata holds privacy-filtered detail derived from a tool's input.

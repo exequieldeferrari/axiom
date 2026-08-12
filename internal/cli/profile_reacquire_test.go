@@ -286,7 +286,7 @@ func TestContextResetSeparatesFindingsFromReacquisition(t *testing.T) {
 	}
 	// The profiler saw the repetition and refused it: the context was reset in
 	// between, so it cannot rule out that the second read was worth making.
-	if !strings.Contains(out, "No high-confidence redundant work") {
+	if !strings.Contains(out, "No redundant work") {
 		t.Errorf("a repeated read across a context reset became a finding:\n%s", out)
 	}
 	// This analysis reports the same two reads as one relation, and says only

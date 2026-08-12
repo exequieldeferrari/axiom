@@ -254,10 +254,9 @@ func TestAFindingWithoutCallsHasNoConsumption(t *testing.T) {
 	t.Parallel()
 
 	f := profiler.Finding{
-		Kind:       profiler.KindRepeatedRead,
-		Confidence: profiler.ConfidenceHigh,
-		SessionID:  "s1",
-		Path:       "/src/main.go",
+		Kind:      profiler.KindRepeatedRead,
+		SessionID: "s1",
+		Path:      "/src/main.go",
 	}
 
 	if got := associateOne(t, f, modelRequest("s1", "t1", tokens(1, 2, 3, 4), micros(100))); got != nil {
