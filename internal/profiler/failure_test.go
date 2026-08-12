@@ -18,21 +18,19 @@ func only(t *testing.T, report profiler.Report) profiler.Finding {
 	return report.Findings[0]
 }
 
-// The strongest evidence Axiom can have: the same command, attempted again
-// after failing the same way, with nothing in between it could not see.
+// One command, attempted again after failing, with nothing in between Axiom
+// could not see. That is the whole finding; what the attempts reported about
+// their failures is recorded beside it and is not part of establishing it.
 func TestRepeatedFailureFinding(t *testing.T) {
 	t.Parallel()
 
 	f := only(t, analyze(newStream("session-1").inTurn("turn-1").
-		shell("go-test", failing("same"), exiting(1), took(1200)).
-		shell("go-test", failing("same"), exiting(1), took(500)).
-		shell("go-test", failing("same"), exiting(1), took(400))))
+		shell("go-test", statusOnly("same"), exiting(1), took(1200)).
+		shell("go-test", statusOnly("same"), exiting(1), took(500)).
+		shell("go-test", statusOnly("same"), exiting(1), took(400))))
 
 	if f.Kind != profiler.KindRepeatedFailure {
 		t.Errorf("Kind = %q", f.Kind)
-	}
-	if f.Confidence != profiler.ConfidenceHigh {
-		t.Errorf("Confidence = %q, want high when every attempt failed alike", f.Confidence)
 	}
 	if f.SessionID != "session-1" {
 		t.Errorf("SessionID = %q", f.SessionID)
@@ -42,9 +40,6 @@ func TestRepeatedFailureFinding(t *testing.T) {
 	}
 	if f.CommandDigest != "go-test" {
 		t.Errorf("CommandDigest = %q", f.CommandDigest)
-	}
-	if f.FailureDigest != "same" {
-		t.Errorf("FailureDigest = %q, want the failure they shared", f.FailureDigest)
 	}
 	if f.ExitCode == nil || *f.ExitCode != 1 {
 		t.Errorf("ExitCode = %v, want 1", f.ExitCode)
@@ -69,43 +64,170 @@ func TestRepeatedFailureFinding(t *testing.T) {
 	}
 }
 
-// Real commands print elapsed times, so two runs of one failing test command
-// rarely produce identical text. The repetition is still established; that the
-// failures were alike is not.
-func TestDifferentFailuresLowerConfidence(t *testing.T) {
+// The shapes controlled captures of Claude Code produced, and the pair of
+// observations each must yield. Two of them carry the same reporting and
+// disagree on identity, and two carry the same identity and disagree on
+// reporting, which is the whole point of recording them apart.
+//
+// W1 and W2 are labelled as they were in the captures: a failing Go test whose
+// reports differed over an elapsed time and an output path while naming the
+// same assertion, and a failing Go build whose reports came out byte for byte
+// the same. SILENT is a command that exited non-zero having printed nothing,
+// where Claude Code reported the exit status alone.
+func TestFailureReportingAndReportIdentityAreObservedApart(t *testing.T) {
 	t.Parallel()
 
-	f := only(t, analyze(newStream("a").inTurn("t1").
-		shell("go-test", failing("first"), exiting(1)).
-		shell("go-test", failing("second"), exiting(1))))
+	cases := map[string]struct {
+		stream    *stream
+		reporting profiler.FailureReporting
+		reports   profiler.ReportIdentity
+	}{
+		"W1, a failing test reporting detail that differed": {
+			stream: newStream("a").inTurn("t1").
+				shell("go-test", withDetail("run-1"), exiting(1)).
+				shell("go-test", withDetail("run-2"), exiting(1)).
+				shell("go-test", withDetail("run-3"), exiting(1)),
+			reporting: profiler.FailureReportingDetail,
+			reports:   profiler.ReportsDiffered,
+		},
+		"W2, a failing build reporting detail that matched": {
+			stream: newStream("a").inTurn("t1").
+				shell("go-build", withDetail("same"), exiting(1)).
+				shell("go-build", withDetail("same"), exiting(1)).
+				shell("go-build", withDetail("same"), exiting(1)),
+			reporting: profiler.FailureReportingDetail,
+			reports:   profiler.ReportsIdentical,
+		},
+		"SILENT, a status reported alone and identically": {
+			stream: newStream("a").inTurn("t1").
+				shell("false", statusOnly("exit-1")).
+				shell("false", statusOnly("exit-1")).
+				shell("false", statusOnly("exit-1")),
+			reporting: profiler.FailureReportingStatusOnly,
+			reports:   profiler.ReportsIdentical,
+		},
+		"a status reported alone by attempts that exited differently": {
+			stream: newStream("a").inTurn("t1").
+				shell("script", statusOnly("exit-1")).
+				shell("script", statusOnly("exit-2")),
+			reporting: profiler.FailureReportingStatusOnly,
+			reports:   profiler.ReportsDiffered,
+		},
+	}
 
-	if f.Confidence != profiler.ConfidenceMedium {
-		t.Errorf("Confidence = %q, want medium", f.Confidence)
-	}
-	if f.FailureDigest != "" {
-		t.Errorf("FailureDigest = %q, want none when the attempts reported different failures", f.FailureDigest)
-	}
-	// The exit status agreed even though the text did not, and it is
-	// recorded independently of it.
-	if f.ExitCode == nil || *f.ExitCode != 1 {
-		t.Errorf("ExitCode = %v, want 1", f.ExitCode)
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := only(t, analyze(c.stream))
+			if f.Reporting != c.reporting {
+				t.Errorf("Reporting = %q, want %q", f.Reporting, c.reporting)
+			}
+			if f.Reports != c.reports {
+				t.Errorf("Reports = %q, want %q", f.Reports, c.reports)
+			}
+		})
 	}
 }
 
-// An agent that reports no failure detail leaves Axiom unable to compare the
-// attempts, which is the same position as knowing they differed.
-func TestUnreportedFailuresLowerConfidence(t *testing.T) {
+// Attempts classified differently are mixed, which is neither of them. Folding
+// a run into the state most of its attempts reached would describe attempts
+// that were never observed reaching it.
+func TestMixedReportingIsKeptMixed(t *testing.T) {
+	t.Parallel()
+
+	f := only(t, analyze(newStream("a").inTurn("t1").
+		shell("go-test", withDetail("x")).
+		shell("go-test", statusOnly("y"))))
+
+	if f.Reporting != profiler.FailureReportingMixed {
+		t.Errorf("Reporting = %q, want it mixed", f.Reporting)
+	}
+	if f.Reports != profiler.ReportsDiffered {
+		t.Errorf("Reports = %q, want them differing", f.Reports)
+	}
+}
+
+// One attempt Axiom could not place leaves the run unplaced. It is not mixed:
+// mixed says the attempts were classified and came out apart, and here one of
+// them was never read.
+func TestOneUnplacedAttemptLeavesTheRunUnestablished(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]*stream{
-		"nothing reported at all": newStream("a").inTurn("t1").
-			shell("go-test", failed).shell("go-test", failed),
+		"a report the adapter could not classify": newStream("a").inTurn("t1").
+			shell("go-test", withDetail("x")).
+			shell("go-test", unreadable("y")),
 
-		"reported for one attempt only": newStream("a").inTurn("t1").
-			shell("go-test", failing("x")).shell("go-test", failed),
+		"a record written before reports were classified": newStream("a").inTurn("t1").
+			shell("go-test", withDetail("x")).
+			shell("go-test", failing("y")),
+
+		"an unplaced attempt before the placed ones": newStream("a").inTurn("t1").
+			shell("go-test", failing("x")).
+			shell("go-test", withDetail("y")).
+			shell("go-test", withDetail("z")),
+
+		"an outcome with no failure recorded beside it": newStream("a").inTurn("t1").
+			shell("go-test", withDetail("x")).
+			shell("go-test", failed),
+	}
+
+	for name, s := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if f := only(t, analyze(s)); f.Reporting != profiler.FailureReportingUnestablished {
+				t.Errorf("Reporting = %q, want it unestablished", f.Reporting)
+			}
+		})
+	}
+}
+
+// Historical records carry no classification at all, and a whole run of them
+// establishes nothing about what was reported. Their digests are still
+// comparable, which is the point of keeping the two questions apart.
+func TestHistoricalRecordsEstablishNoReportingAndStillCompare(t *testing.T) {
+	t.Parallel()
+
+	identical := only(t, analyze(newStream("a").inTurn("t1").
+		shell("go-test", failing("x")).
+		shell("go-test", failing("x"))))
+
+	if identical.Reporting != profiler.FailureReportingUnestablished {
+		t.Errorf("Reporting = %q, want it unestablished for records that predate it", identical.Reporting)
+	}
+	if identical.Reports != profiler.ReportsIdentical {
+		t.Errorf("Reports = %q, want them identical", identical.Reports)
+	}
+
+	differed := only(t, analyze(newStream("a").inTurn("t1").
+		shell("go-test", failing("x")).
+		shell("go-test", failing("y"))))
+
+	if differed.Reports != profiler.ReportsDiffered {
+		t.Errorf("Reports = %q, want them differing", differed.Reports)
+	}
+}
+
+// An attempt that reported nothing gives Axiom nothing to compare, which is a
+// weaker position than knowing the reports differed and is recorded as its
+// own.
+func TestAnAbsentReportLeavesIdentityUnestablished(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]*stream{
+		"no attempt reported anything": newStream("a").inTurn("t1").
+			shell("go-test", untexted).shell("go-test", untexted),
+
+		"reported for the first attempt only": newStream("a").inTurn("t1").
+			shell("go-test", withDetail("x")).shell("go-test", untexted),
 
 		"reported for the later attempt only": newStream("a").inTurn("t1").
-			shell("go-test", failed).shell("go-test", failing("x")),
+			shell("go-test", untexted).shell("go-test", withDetail("x")),
+
+		"a record carrying no failure at all": newStream("a").inTurn("t1").
+			shell("go-test", failed).shell("go-test", failed),
 	}
 
 	for name, s := range cases {
@@ -113,11 +235,8 @@ func TestUnreportedFailuresLowerConfidence(t *testing.T) {
 			t.Parallel()
 
 			f := only(t, analyze(s))
-			if f.Confidence != profiler.ConfidenceMedium {
-				t.Errorf("Confidence = %q, want medium", f.Confidence)
-			}
-			if f.FailureDigest != "" {
-				t.Errorf("FailureDigest = %q, want none", f.FailureDigest)
+			if f.Reports != profiler.ReportsUnestablished {
+				t.Errorf("Reports = %q, want it unestablished", f.Reports)
 			}
 			if f.ExitCode != nil {
 				t.Errorf("ExitCode = %v, want none", *f.ExitCode)
@@ -126,20 +245,50 @@ func TestUnreportedFailuresLowerConfidence(t *testing.T) {
 	}
 }
 
+// Every attempt reporting no text at all is its own observation, and is not
+// the same as attempts whose reports Axiom failed to read.
+func TestAttemptsReportingNoTextAreSaidToHaveReportedNone(t *testing.T) {
+	t.Parallel()
+
+	f := only(t, analyze(newStream("a").inTurn("t1").
+		shell("go-test", untexted).
+		shell("go-test", untexted)))
+
+	if f.Reporting != profiler.FailureReportingNoText {
+		t.Errorf("Reporting = %q, want it saying no text was reported", f.Reporting)
+	}
+}
+
+// Identity is established once and cannot re-form: a third attempt matching
+// the first does not undo the second having differed from it.
+func TestDifferingReportsStayDiffering(t *testing.T) {
+	t.Parallel()
+
+	f := only(t, analyze(newStream("a").inTurn("t1").
+		shell("go-test", withDetail("x")).
+		shell("go-test", withDetail("y")).
+		shell("go-test", withDetail("x"))))
+
+	if f.Reports != profiler.ReportsDiffered {
+		t.Errorf("Reports = %q, want them differing", f.Reports)
+	}
+}
+
 // A status that does not describe every attempt describes none of them.
 func TestDisagreeingExitCodesAreWithheld(t *testing.T) {
 	t.Parallel()
 
 	f := only(t, analyze(newStream("a").inTurn("t1").
-		shell("go-test", failing("x"), exiting(1)).
-		shell("go-test", failing("x"), exiting(2))))
+		shell("go-test", withDetail("x"), exiting(1)).
+		shell("go-test", withDetail("x"), exiting(2))))
 
 	if f.ExitCode != nil {
 		t.Errorf("ExitCode = %d, want none when the attempts exited differently", *f.ExitCode)
 	}
-	// The failures themselves still matched, so the finding keeps its level.
-	if f.Confidence != profiler.ConfidenceHigh {
-		t.Errorf("Confidence = %q, want high", f.Confidence)
+	// The status is read out of the report, but what is established about
+	// the reports themselves does not move with it.
+	if f.Reporting != profiler.FailureReportingDetail || f.Reports != profiler.ReportsIdentical {
+		t.Errorf("Reporting = %q and Reports = %q, want the reports observed unchanged", f.Reporting, f.Reports)
 	}
 }
 

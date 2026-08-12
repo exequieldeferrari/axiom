@@ -200,13 +200,10 @@ const (
 	countLabelWidth = 20
 	// Wide enough to leave a gap after the longest detail label.
 	detailLabelWidth = 34
-	// Wide enough for the longest confidence level.
-	confidenceWidth  = 6
 	headlineWidth    = 42
 	digestDisplayLen = 12
-	// Indented to the column a headline starts in: two spaces, the
-	// confidence, and the space after it.
-	findingIndent = "         "
+	// Indented under the headline, which starts two spaces in.
+	findingIndent = "    "
 	// Associated consumption is indented under its own heading, and its
 	// labels are narrowed to match so the values stay in one column.
 	associatedIndent     = findingIndent + "  "
@@ -221,8 +218,8 @@ const (
 	scopeExplanation  = "Analysis is scoped to a single session and subagent, and every recorded\ncontext reset ends it: work repeated after a reset, or in a later session,\nis not counted, because the agent's context may legitimately have been lost\nin between.\n"
 	observedCaveat    = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
 	measuredCaveat    = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
-	failureCaveat     = "A repeated failed attempt is one shell command tried again after it failed,\nwithin a single turn, with nothing in between that Axiom can see changing\nstate. The same observed failure means the agent reported the failures\nidentically, not that they had the same cause. Where a later attempt was\nobserved succeeding it is reported as that and nothing more: what came\nbetween is not evidence of what made the difference.\n"
-	noFindingsMessage = "  No high-confidence redundant work or repeated failed attempts detected.\n"
+	failureCaveat     = "A repeated failed attempt is one shell command tried again after it failed,\nwithin a single turn, with nothing in between that Axiom can see changing\nstate. Failure reporting says what each attempt's failure report carried\nbeyond a recognized exit status, and Reports says whether those reports came\nout the same. They are two observations about text the agent wrote, and\nneither ranks the other: reports often differ over an elapsed time or an\noutput path alone, and reports match most easily when there was nothing in\nthem to differ. Neither says why the attempts failed, and an exit status is\nread out of that same text. Where a later attempt was observed succeeding it\nis reported as that and nothing more: what came between is not evidence of\nwhat made the difference.\n"
+	noFindingsMessage = "  No redundant work or repeated failed attempts detected.\n"
 )
 
 // reportInput is everything one report is written from.
@@ -302,8 +299,7 @@ func writeReport(w io.Writer, in reportInput) {
 }
 
 func writeFinding(w io.Writer, f correlate.Measured) {
-	fmt.Fprintf(w, "  %-*s %-*s %s\n", confidenceWidth,
-		strings.ToUpper(string(f.Confidence)), headlineWidth, headline(f.Kind), attribution(f.Finding))
+	fmt.Fprintf(w, "  %-*s %s\n", headlineWidth, headline(f.Kind), attribution(f.Finding))
 	fmt.Fprintf(w, "%s%s\n", findingIndent, evidence(f.Finding))
 
 	switch f.Kind {
@@ -314,6 +310,11 @@ func writeFinding(w io.Writer, f correlate.Measured) {
 	case profiler.KindRepeatedFailure:
 		detail(w, "Failed attempts", strconv.Itoa(f.Occurrences))
 		detail(w, "Repeated after a failure", strconv.Itoa(f.Redundant))
+		// Both are always printed, including where nothing was established.
+		// They answer different questions, and leaving one out would let its
+		// absence read as the other's answer.
+		detail(w, "Failure reporting", failureReporting(f.Reporting))
+		detail(w, "Reports", reportIdentity(f.Reports))
 		// An exit status the attempts disagreed on is left out rather than
 		// summarized: the finding would be naming a status that no longer
 		// describes every attempt under it.
@@ -340,9 +341,12 @@ func writeFinding(w io.Writer, f correlate.Measured) {
 		detail(w, "Command digest", shortDigest(f.CommandDigest))
 	case profiler.KindRepeatedFailure:
 		detail(w, "Command digest", shortDigest(f.CommandDigest))
-		if f.FailureDigest != "" {
-			detail(w, "Failure digest", shortDigest(f.FailureDigest))
-		}
+		// The digest of a failure report is not printed. A command digest
+		// names something the reader can act on, since the same command
+		// appears under it everywhere; a failure digest names one exact
+		// string of the agent's display text, which reappears nowhere and
+		// invites being read as an identity the failures shared.
+		//
 		// Reported only where it was observed. Nothing is printed otherwise,
 		// because a command that was never tried again tells Axiom nothing
 		// about whether the agent got past it.
@@ -450,17 +454,48 @@ func evidence(f profiler.Finding) string {
 	case profiler.KindRepeatedShell:
 		return fmt.Sprintf("Executed %d times, with only read-only operations in between", f.Occurrences)
 	case profiler.KindRepeatedFailure:
-		// The two levels differ in what is known about the failures, so they
-		// have to read differently. Medium covers attempts that reported
-		// different failures and attempts that reported none, which are
-		// different observations but the same position: identical reporting
-		// was not established. Neither wording says anything about a cause.
-		if f.Confidence == profiler.ConfidenceHigh {
-			return fmt.Sprintf("Failed %d times, each reporting the same observed failure", f.Occurrences)
-		}
-		return fmt.Sprintf("Failed %d times; identical failure reporting was not established", f.Occurrences)
+		// One sentence for every failure finding, stating the rule that
+		// established it. What the attempts reported varies and is stated on
+		// its own lines below: reading the strength of the finding out of
+		// those reports is the mistake this line used to make.
+		return fmt.Sprintf("Failed %d times in one turn, with only read-only operations in between", f.Occurrences)
 	default:
 		return fmt.Sprintf("Repeated %d times", f.Occurrences)
+	}
+}
+
+// failureReporting says what the attempts were observed reporting.
+//
+// Each phrase is about the reports and not the commands: an agent that
+// reported nothing beyond a status may have run a command that printed
+// plenty. None of them is a grade, and they are deliberately alike in tone so
+// that no reading of the finding turns on which one appears.
+func failureReporting(r profiler.FailureReporting) string {
+	switch r {
+	case profiler.FailureReportingDetail:
+		return "detail beyond status, every attempt"
+	case profiler.FailureReportingStatusOnly:
+		return "recognized status only, every attempt"
+	case profiler.FailureReportingNoText:
+		return "no text at all, every attempt"
+	case profiler.FailureReportingMixed:
+		return "mixed across the attempts"
+	default:
+		return "not established"
+	}
+}
+
+// reportIdentity says whether the attempts' reports came out the same. An
+// unestablished identity is stated as such rather than left out, because
+// silence here would read as reports that matched.
+func reportIdentity(i profiler.ReportIdentity) string {
+	switch i {
+	case profiler.ReportsIdentical:
+		return "identical"
+	case profiler.ReportsDiffered:
+		return "differed"
+	default:
+		return "not established"
 	}
 }
 

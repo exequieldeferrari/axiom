@@ -188,10 +188,14 @@ type failureRun struct {
 	// can be recorded before one arrives. Taking it at the close would drop
 	// exactly those, and nothing recorded afterwards can recover them.
 	start observation
-	// digest is the failure every attempt so far reported, and is empty as
-	// soon as one of them reports a different failure or none. An empty
-	// digest is never a valid failure, so agreement can never be re-formed
-	// once it is lost.
+	// reporting is what every attempt so far was observed reporting about its
+	// failure, and reports is whether those reports came out the same. They
+	// are separate questions asked of the same text, and an attempt can
+	// settle one while leaving the other open.
+	reporting FailureReporting
+	reports   ReportIdentity
+	// digest is the report every attempt so far produced, kept only to
+	// compare the next one against.
 	digest string
 	// exitCode is the status every attempt so far exited with, on the same
 	// terms. It is tracked separately because an agent may report one without
@@ -439,7 +443,7 @@ func (p *Profiler) attempt(sc *scope, ev event.Event, subject string) {
 	}
 	if ok {
 		fr.extend(ev)
-		fr.agree(f)
+		fr.narrow(f)
 	} else {
 		sc.failures[subject] = newFailureRun(subject, ev)
 	}
@@ -613,9 +617,17 @@ func call(ev event.Event) Call {
 }
 
 func newFailureRun(subject string, ev event.Event) *failureRun {
-	fr := &failureRun{run: newRun(subject, ev), turn: ev.TurnID}
+	fr := &failureRun{
+		run:       newRun(subject, ev),
+		turn:      ev.TurnID,
+		reporting: reportingOf(ev.Tool.Failure),
+		reports:   ReportsUnestablished,
+	}
 	if f := ev.Tool.Failure; f != nil {
-		fr.digest = f.Digest
+		if f.Digest != "" {
+			fr.digest = f.Digest
+			fr.reports = ReportsIdentical
+		}
 		if f.ExitCode != nil {
 			code := *f.ExitCode
 			fr.exitCode = &code
@@ -624,17 +636,77 @@ func newFailureRun(subject string, ev event.Event) *failureRun {
 	return fr
 }
 
-// agree narrows what every attempt in the sequence has reported in common.
+// narrow folds one more attempt into what the sequence has established about
+// its attempts.
 //
-// Agreement only ever weakens. An attempt that reports nothing is not
-// agreement with an attempt that did: the two are not known to be alike, which
-// is the same position as knowing they differ.
-func (fr *failureRun) agree(f *event.Failure) {
-	if f == nil || f.Digest == "" || f.Digest != fr.digest {
-		fr.digest = ""
-	}
+// Every question here only ever weakens, and none of them can be re-formed
+// once lost. An attempt that reports nothing is not agreement with an attempt
+// that did.
+func (fr *failureRun) narrow(f *event.Failure) {
+	fr.reporting = narrowReporting(fr.reporting, reportingOf(f))
+	fr.narrowIdentity(f)
 	if f == nil || f.ExitCode == nil || fr.exitCode == nil || *f.ExitCode != *fr.exitCode {
 		fr.exitCode = nil
+	}
+}
+
+// narrowIdentity folds in whether this attempt reported what the ones before
+// it did.
+//
+// A missing report is not a differing one. Without two reports there is
+// nothing to compare, so an attempt that reported none leaves the question
+// open however the others came out, and that is not the same observation as
+// reports known to have differed.
+func (fr *failureRun) narrowIdentity(f *event.Failure) {
+	if fr.reports == ReportsUnestablished {
+		return
+	}
+	if f == nil || f.Digest == "" {
+		fr.reports, fr.digest = ReportsUnestablished, ""
+		return
+	}
+	if f.Digest != fr.digest {
+		fr.reports = ReportsDiffered
+	}
+}
+
+// reportingOf is what one attempt's record establishes about its failure
+// report.
+//
+// Everything this version cannot place lands in the state that admits it: a
+// report the adapter could not classify, a record written before the
+// classification existed, and a value some later adapter may add. None of them
+// is evidence that the attempt reported nothing.
+func reportingOf(f *event.Failure) FailureReporting {
+	if f == nil {
+		return FailureReportingUnestablished
+	}
+	switch f.Reporting {
+	case event.ReportingDetail:
+		return FailureReportingDetail
+	case event.ReportingStatusOnly:
+		return FailureReportingStatusOnly
+	case event.ReportingNoText:
+		return FailureReportingNoText
+	default:
+		return FailureReportingUnestablished
+	}
+}
+
+// narrowReporting folds one attempt's classification into the sequence's.
+//
+// An attempt that could not be placed leaves the whole run unplaced, because a
+// run cannot be said to report alike when one of its reports was never read.
+// Two attempts placed differently are mixed, which is neither of them and is
+// deliberately not collapsed into either.
+func narrowReporting(sofar, next FailureReporting) FailureReporting {
+	switch {
+	case sofar == FailureReportingUnestablished || next == FailureReportingUnestablished:
+		return FailureReportingUnestablished
+	case sofar == next:
+		return sofar
+	default:
+		return FailureReportingMixed
 	}
 }
 
@@ -645,16 +717,8 @@ func (fr *failureRun) finding(key scopeKey) (Finding, bool) {
 		return Finding{}, false
 	}
 
-	// The repetition is established either way. What separates the levels is
-	// whether the failures themselves are known to be alike: identical
-	// reported failures leave nothing to the reader's imagination, while
-	// failures Axiom cannot compare leave open that each attempt met something
-	// different.
-	f.Confidence = ConfidenceMedium
-	if fr.digest != "" {
-		f.Confidence = ConfidenceHigh
-		f.FailureDigest = fr.digest
-	}
+	f.Reporting = fr.reporting
+	f.Reports = fr.reports
 	f.ExitCode = fr.exitCode
 	return f, true
 }
@@ -666,7 +730,6 @@ func (r *run) finding(kind Kind, key scopeKey) (Finding, bool) {
 
 	f := Finding{
 		Kind:       kind,
-		Confidence: ConfidenceHigh,
 		SessionID:  key.session,
 		SubagentID: key.subagent,
 		// Both counts come from the occurrence list so that they cannot

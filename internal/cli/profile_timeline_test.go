@@ -102,7 +102,7 @@ func TestContextResetEndsFindingsAndTheEpochTogether(t *testing.T) {
 		t.Errorf("the reset was not reported as a boundary:\n%s", out)
 	}
 	// The same file was read twice, but the context was discarded in between.
-	if !strings.Contains(out, "No high-confidence redundant work") {
+	if !strings.Contains(out, "No redundant work") {
 		t.Errorf("a repeated read across a context reset was reported as a finding:\n%s", out)
 	}
 }
@@ -290,7 +290,7 @@ func TestProfileScopesToOneSession(t *testing.T) {
 	}
 	// The repetition belongs to the session that was left out, so scoping it
 	// away has to leave the findings behind with it.
-	if !strings.Contains(out, "No high-confidence redundant work") {
+	if !strings.Contains(out, "No redundant work") {
 		t.Errorf("a finding from another session survived scoping:\n%s", out)
 	}
 }

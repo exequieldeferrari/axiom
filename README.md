@@ -398,7 +398,7 @@ Work by path, under /repo
 
 Findings
 
-  No high-confidence redundant work or repeated failed attempts detected.
+  No redundant work or repeated failed attempts detected.
 ```
 
 The report answers three different questions in order: what the agent's context
@@ -410,12 +410,12 @@ A quiet findings section is a real result. Axiom would rather miss redundant wor
 than invent it, so it only reports repetition it can justify:
 
 ```console
-  HIGH   Repeated shell operation                   session 7b4d3ab1
-         Executed 3 times, with only read-only operations in between
-         Potentially redundant executions  2
-         Repeated-call tool time           640ms
-         Command digest                    3f1c0a9e77b4…
-         Window                            2026-08-10 20:25:04 → 20:29:11 UTC
+  Repeated shell operation                   session 7b4d3ab1
+    Executed 3 times, with only read-only operations in between
+    Potentially redundant executions  2
+    Repeated-call tool time           640ms
+    Command digest                    3f1c0a9e77b4…
+    Window                            2026-08-10 20:25:04 → 20:29:11 UTC
 ```
 
 ### Context epochs
@@ -489,9 +489,8 @@ Read again in a later context epoch
       epoch 3, opened by resume, 2 reads, later write or edit recorded
 ```
 
-This is measurement, not a finding. It has no confidence level and no severity,
-because there is nothing to rule out: the reads happened, in those epochs, and
-that is the whole claim.
+This is measurement, not a finding. There is nothing here to rule out: the reads
+happened, in those epochs, and that is the whole claim.
 
 It exists because it is the one thing neither other section can say. The
 profiler stops comparing at every recorded reset — after one, the agent may
@@ -629,13 +628,13 @@ If a receiver was running (see [Recording usage](#recording-usage)), findings
 also report what the repeated calls actually returned:
 
 ```console
-  HIGH   Repeated file read                         session 7b4d3ab1
-         Read 3 times, with no agent modification observed in between
-         Potentially redundant reads       2
-         Redundant tool output             15.0 KB
-         Repeated-call tool time           4ms
-         File                              /repo/internal/store/store.go
-         Window                            2026-08-10 20:25:04 → 20:25:09 UTC
+  Repeated file read                         session 7b4d3ab1
+    Read 3 times, with no agent modification observed in between
+    Potentially redundant reads       2
+    Redundant tool output             15.0 KB
+    Repeated-call tool time           4ms
+    File                              /repo/internal/store/store.go
+    Window                            2026-08-10 20:25:04 → 20:25:09 UTC
 ```
 
 The size is measured, never estimated. Axiom joins the two streams on the
@@ -655,27 +654,39 @@ and Axiom reports it separately: the same shell command attempted again, within
 one turn, with nothing in between that Axiom can see changing state.
 
 ```console
-  HIGH   Repeated failed attempt                    session 9f2c1d3e
-         Failed 3 times, each reporting the same observed failure
-         Failed attempts                   3
-         Repeated after a failure          2
-         Same exit code                    3
-         Repeated-call tool time           1.061s
-         Command digest                    c10ec4b070ab…
-         Failure digest                    30303e9585c1…
-         Window                            2026-08-11 14:46:01 → 14:46:06 UTC
+  Repeated failed attempt                    session 9f2c1d3e
+    Failed 3 times in one turn, with only read-only operations in between
+    Failed attempts                   3
+    Repeated after a failure          2
+    Failure reporting                 detail beyond status, every attempt
+    Reports                           differed
+    Same exit code                    1
+    Repeated-call tool time           1.061s
+    Command digest                    c10ec4b070ab…
+    Window                            2026-08-11 14:46:01 → 14:46:06 UTC
 ```
 
-The two confidence levels say how much is known about the failures themselves,
-not how bad the behavior looks. **HIGH** means every attempt reported an
-identical failure. **MEDIUM** means Axiom could not establish that: the
-attempts reported different failures, or at least one reported none. Real
-commands print elapsed times and changing line numbers, so identical failures
-are the exception rather than the rule.
+Two lines describe what the agent said about the failures, and they answer
+different questions. **Failure reporting** says whether each attempt's failure
+report carried anything beyond a recognized exit status: `detail beyond status`,
+`recognized status only`, `no text at all`, `mixed across the attempts`, or
+`not established`. **Reports** says whether those reports were the same string:
+`identical`, `differed`, or `not established` where an attempt reported nothing
+to compare.
 
-Identical failures mean the agent described them the same way. They do not mean
-the attempts failed for the same reason — the error text is never recorded, and
-nothing in a digest establishes a cause.
+**Neither line ranks the other, and neither grades the finding.** Reports
+routinely differ over an elapsed time or a log path while naming the same
+failing assertion every time, and they match most easily when there was nothing
+in them to differ — a command that exits non-zero in silence is reported as
+`Exit code 1` on every attempt, identically. Axiom used to grade these findings
+`HIGH` and `MEDIUM` on exactly that comparison, which rewarded silence and
+penalized detail. It no longer grades them at all.
+
+Both lines describe the report and not the command. `recognized status only`
+means the agent reported nothing beyond a status; it does not mean the command
+printed nothing, and output can go somewhere no report describes. Nothing here
+establishes that the attempts failed for the same reason: the error text is
+never recorded, and neither line reaches for a cause.
 
 The sequence is confined to a single turn, unlike the redundancy findings. A
 turn boundary is where input Axiom never saw may have arrived, and an attempt
@@ -687,7 +698,7 @@ or an interrupted call, which a person stopped.
 Where the same command is later observed succeeding, the report says so:
 
 ```console
-         Same command later succeeded      yes
+    Same command later succeeded      yes
 ```
 
 That is an observation about a later attempt and nothing else. What happened in
@@ -701,14 +712,14 @@ Where that line appears, Axiom also lists the tool calls it recorded between the
 last failed attempt and that success:
 
 ```console
-         Recorded before the later success
-           Operations recorded             7
-           Whole-file reads                2
-           Edits                           1
-           Unrecognized                    4
-           Writes or edits recorded at
-             status.txt
-           Turn boundary                   none recorded
+    Recorded before the later success
+      Operations recorded             7
+      Whole-file reads                2
+      Edits                           1
+      Unrecognized                    4
+      Writes or edits recorded at
+        status.txt
+      Turn boundary                   none recorded
 ```
 
 Every recorded call is counted, in categories that add up to the total, so the
@@ -731,9 +742,9 @@ have been needed, and a shorter list is not a better one.
 Where nothing was recorded in between, the block says exactly that:
 
 ```console
-         Recorded before the later success
-           No tool operation was recorded between them.
-           Turn boundary                   recorded between them
+    Recorded before the later success
+      No tool operation was recorded between them.
+      Turn boundary                   recorded between them
 ```
 
 That describes the log, not the execution. A call rejected before it ran is
@@ -768,23 +779,23 @@ a receiver recorded the model requests behind a finding's turns, Axiom shows
 what they consumed:
 
 ```console
-  HIGH   Repeated file read                         session 7b4d3ab1
-         Read 3 times, with no agent modification observed in between
-         Potentially redundant reads       2
-         Redundant tool output             15.0 KB
-         Repeated-call tool time           4ms
-         File                              /repo/internal/store/store.go
-         Window                            2026-08-10 20:25:04 → 20:25:09 UTC
+  Repeated file read                         session 7b4d3ab1
+    Read 3 times, with no agent modification observed in between
+    Potentially redundant reads       2
+    Redundant tool output             15.0 KB
+    Repeated-call tool time           4ms
+    File                              /repo/internal/store/store.go
+    Window                            2026-08-10 20:25:04 → 20:25:09 UTC
 
-         Observed model consumption in the turn where this happened
-           Model requests                  2
-           Input tokens                    8
-           Output tokens                   401
-           Cache read                      117,147
-           Cache creation                  41,141
-           Model cost                      $0.2880
-           This is the observed model consumption
-           for that turn, not the cost of the repetition.
+    Observed model consumption in the turn where this happened
+      Model requests                  2
+      Input tokens                    8
+      Output tokens                   401
+      Cache read                      117,147
+      Cache creation                  41,141
+      Model cost                      $0.2880
+      This is the observed model consumption
+      for that turn, not the cost of the repetition.
 ```
 
 Read the two blocks differently. Everything above the heading is attributable
@@ -807,15 +818,15 @@ depends on the receiver. When the two differ, the report says so rather than
 describing a smaller finding:
 
 ```console
-         Observed model consumption in 1 of the 3 turns where this happened
-           Model requests                  1
-           Input tokens                    2
-           Output tokens                   93
-           Cache read                      0
-           Cache creation                  35,419
-           Model cost                      $0.2139
-           This is the observed model consumption
-           for the turn it was recorded in, not the cost of the repetition.
+    Observed model consumption in 1 of the 3 turns where this happened
+      Model requests                  1
+      Input tokens                    2
+      Output tokens                   93
+      Cache read                      0
+      Cache creation                  35,419
+      Model cost                      $0.2139
+      This is the observed model consumption
+      for the turn it was recorded in, not the cost of the repetition.
 ```
 
 The read still happened in three turns. Nothing is assumed about the two with
@@ -937,6 +948,14 @@ read:
 - **Only failures the agent reported are seen.** A call that never ran cannot
   fail visibly, so "no failures" means none were recorded, not that nothing
   went wrong.
+- **A timed-out command is recorded as a success.** Claude Code was observed
+  reporting a Bash tool timeout as a completed call, with no error and no
+  timeout marker anywhere in the payload. Axiom follows the outcome the agent
+  gives it, so a timeout can end a sequence of failed attempts and show up as
+  `Same command later succeeded`.
+- **What a failure reported is not what the command produced.** Axiom records
+  whether the agent's failure report carried anything beyond an exit status. A
+  report that carried nothing else is not a command that printed nothing.
 - **Sessions may have no end.** If the agent is killed, no `SessionEnd` arrives.
 - **A session is not a unit of work.** Claude Code was observed keeping the
   session ID across compaction and resume, and reporting a new one on `/clear`

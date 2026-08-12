@@ -21,32 +21,74 @@ const (
 	KindRepeatedFailure Kind = "repeated_failure"
 )
 
-// Confidence describes how well the recorded evidence supports a finding. It
-// is not severity: it says nothing about how much the repetition cost.
-type Confidence string
+// FailureReporting is what the attempts of a KindRepeatedFailure run were
+// observed reporting about their failures, folded across all of them.
+//
+// It describes the reports and never the commands behind them, and it is not
+// an ordering: no value here is better evidence than another. What it is for
+// is to keep the reader from reading a report Axiom could not classify, or one
+// that carried nothing, as though the agent had described the failure.
+type FailureReporting string
 
 const (
-	// ConfidenceHigh means the repetition happened inside one context scope
-	// and every operation between the repeats is known to leave the observed
-	// state unchanged, so there was no window in which a change could have
-	// escaped observation. A repeated failure is high only when every attempt
-	// also reported the same failure.
-	ConfidenceHigh Confidence = "high"
+	// FailureReportingDetail means every attempt's report carried content
+	// beyond a recognized exit status. It says nothing about what that
+	// content was or whether the attempts described the same thing.
+	FailureReportingDetail FailureReporting = "detail"
 
-	// ConfidenceMedium means the repetition itself is established on the same
-	// terms, but the evidence that the attempts were alike stops short of the
-	// failures themselves: they were reported differently, or at least one was
-	// not reported at all. Only repeated failures reach this level.
-	ConfidenceMedium Confidence = "medium"
+	// FailureReportingStatusOnly means every attempt's report was a
+	// recognized exit status and nothing else. The commands themselves may
+	// have produced anything at all.
+	FailureReportingStatusOnly FailureReporting = "status_only"
+
+	// FailureReportingNoText means no attempt was reported with any text.
+	FailureReportingNoText FailureReporting = "no_text"
+
+	// FailureReportingMixed means the attempts were classified and did not
+	// all land in the same state. It is kept rather than collapsed into any
+	// of them, because a run where one attempt described its failure and
+	// another did not is neither.
+	FailureReportingMixed FailureReporting = "mixed"
+
+	// FailureReportingUnestablished means at least one attempt could not be
+	// placed: its report was in a shape the adapter does not classify, or the
+	// record predates the classification. One such attempt leaves the whole
+	// question open, because a run cannot be described as reporting alike
+	// when one of its reports was never read.
+	FailureReportingUnestablished FailureReporting = "unestablished"
+)
+
+// ReportIdentity is what the record establishes about whether the attempts of
+// a KindRepeatedFailure run reported their failures in the same words.
+//
+// It is a statement about text and nothing else. Identical reports are not
+// evidence of a shared reason for failing, and differing reports are not
+// evidence against one: reports were observed differing over an elapsed time
+// and an output path while naming the same failing assertion. Neither value
+// grades the finding.
+type ReportIdentity string
+
+const (
+	// ReportsIdentical means every attempt reported a failure and all of the
+	// reports produced the same digest.
+	ReportsIdentical ReportIdentity = "identical"
+	// ReportsDiffered means every attempt reported a failure and at least two
+	// of the reports produced different digests.
+	ReportsDiffered ReportIdentity = "differed"
+	// ReportsUnestablished means at least one attempt reported no text, so
+	// there was nothing to compare. It is held apart from ReportsDiffered:
+	// having no report is not having a different one.
+	ReportsUnestablished ReportIdentity = "unestablished"
 )
 
 // Finding is a single piece of evidence about repeated work.
 //
-// A finding describes what was observed, never what to do about it.
+// A finding describes what was observed, never what to do about it. Findings
+// carry no grade: every one of them is established by the same deterministic
+// rules, and a run that does not meet them is not reported at all.
 type Finding struct {
-	Kind       Kind
-	Confidence Confidence
-	SessionID  string
+	Kind      Kind
+	SessionID string
 	// SubagentID names the nested agent the work belongs to, empty when the
 	// session's own agent did it. A subagent reasons in its own context, so
 	// attributing its repetition to the session would name the wrong actor.
@@ -83,18 +125,21 @@ type Finding struct {
 	// recovered from the digest.
 	CommandDigest string
 
-	// FailureDigest identifies the failure every attempt of a
-	// KindRepeatedFailure run reported, and is empty when they differed or
-	// when one of them reported none.
+	// Reporting and Reports are what a KindRepeatedFailure run's attempts
+	// were observed reporting, and whether those reports came out the same.
 	//
-	// It says that the agent described the failures the same way, and only
-	// that. The error text is never recorded, so nothing here establishes
-	// that the attempts failed for the same reason.
-	FailureDigest string
+	// The two are independent: a run can report detail every time and still
+	// differ, and a run that reports nothing but a status can match exactly.
+	// Neither is a measure of the other, and neither grades the finding.
+	Reporting FailureReporting
+	Reports   ReportIdentity
 
 	// ExitCode is the status every attempt of a KindRepeatedFailure run
 	// exited with, and is nil when they differed or when one of them reported
 	// none. A missing exit code is not a zero one.
+	//
+	// It is read out of the same reported text the fields above describe, so
+	// it is not separate corroboration of them.
 	ExitCode *int
 
 	// LaterSuccess reports that the same command was afterwards observed
