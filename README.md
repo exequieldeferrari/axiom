@@ -55,6 +55,29 @@ Not built yet: repeated-search detection, recommendations, comparison between
 executions, and support for agents other than Claude Code. Axiom reports
 consumption it observed but does not attribute it, and makes no savings claims.
 
+### v0.1.0
+
+The first public 0.x release. It means this narrow workflow — observe Claude
+Code, then profile what it did — is installable, reversible, and works end to
+end, with the evidence semantics described below. It does not mean a stable CLI,
+a schema that will not change, completeness, or readiness for anything beyond one
+developer's own machine. The `0.` is where the instability is stated: expect the
+interface to move before 1.0.
+
+Worth knowing before you try it:
+
+- `axiom profile` reads the whole recorded log. There is no session or time
+  filter yet, so a log that has been accumulating reports all of it.
+- The CLI and the JSONL schema may change before 1.0.
+- Measured bytes and model consumption exist only for the time a receiver was
+  running; everywhere else they are absent, which is not zero.
+- Claude Code is the only agent with an adapter.
+- Two of the four published archives are run end to end before a release goes
+  out: `linux/amd64` and `darwin/arm64`, on the CI runners that exist for them.
+  The `darwin/amd64` and `linux/arm64` archives are cross-compiled and their
+  checksums are verified, but they are never executed, so those two are published
+  on the strength of the build rather than a run.
+
 ## How it works
 
 Axiom observes two independent streams. One says what the agent did, the other
@@ -121,16 +144,82 @@ optimize anything, and it never changes what your agent does.
 
 ## Requirements
 
-- Go 1.26 or newer
-- Claude Code, for the current integration
+- macOS or Linux, on amd64 or arm64
+- Claude Code 2.1.196 or newer
+- Go 1.26 or newer, to build from source
+
+Axiom groups work into turns using the `prompt_id` Claude Code sends with each
+hook event. Versions before 2.1.196 do not send it, and the findings that depend
+on a turn are unreliable without it. v0.1.0 was verified against Claude Code
+2.1.228; later versions are expected to work but are not covered by that check.
+
+Windows is untested and no Windows archive is published. The code compiles for
+it, but nothing about its paths or its settings locations has been exercised
+there. Under WSL2, use the Linux build.
 
 ## Install
+
+### A released binary
+
+Download the archive for your platform from the
+[latest release](https://github.com/exequieldeferrari/axiom/releases/latest):
+
+```bash
+tar -xzf axiom_0.1.0_darwin_arm64.tar.gz
+sudo mv axiom /usr/local/bin/
+axiom version
+```
+
+Each archive holds the binary, the license, and this README. Every release
+publishes `checksums.txt` beside them, listing all four archives, so verify the
+line for the one you downloaded:
+
+```bash
+grep axiom_0.1.0_darwin_arm64.tar.gz checksums.txt | shasum -a 256 -c
+# On Linux: grep axiom_0.1.0_linux_amd64.tar.gz checksums.txt | sha256sum -c
+```
+
+On macOS, download with `curl` rather than a browser. A browser marks the file
+as quarantined and macOS then refuses to run an unsigned binary from it; Axiom is
+not signed or notarized. To clear it on a file you already downloaded:
+`xattr -d com.apple.quarantine ./axiom`.
+
+Put the binary somewhere permanent before running `axiom init`. The hooks Axiom
+installs name an absolute path, so a binary left in a temporary directory would
+stop working when that directory goes away — Axiom refuses to install one.
+
+### With Go
+
+```bash
+go install github.com/exequieldeferrari/axiom/cmd/axiom@v0.1.0
+```
+
+The binary lands in `$(go env GOPATH)/bin` and reports the version it was
+installed at.
+
+### From source
 
 ```bash
 git clone https://github.com/exequieldeferrari/axiom.git
 cd axiom
-make build
+make build      # ./bin/axiom, which reports "dev"
 ```
+
+## Quick Start
+
+```bash
+axiom init                # install the Claude Code hooks for this project
+                          # then use Claude Code as you normally would
+axiom profile             # see what the work consisted of and what repeated
+
+axiom init --telemetry    # optional: have Claude Code export measurements
+axiom observe             # optional: record them while you work
+
+axiom uninstall           # remove everything axiom init wrote
+```
+
+Claude Code reads its settings when a session starts, so start a new session
+after installing.
 
 ## Usage
 
@@ -143,6 +232,7 @@ axiom init --global      # install hooks for all your projects
 axiom init --telemetry   # also export Claude Code's telemetry to axiom
 axiom observe            # record that telemetry while you work
 axiom profile            # analyze recorded events
+axiom uninstall          # remove the Claude Code integration
 ```
 
 `axiom hook claude` is the machine-facing entrypoint Claude Code calls. You do
@@ -170,10 +260,38 @@ Installation is conservative:
 Claude Code adds `.claude/settings.local.json` to your git excludes only when it
 writes that file itself. If Axiom creates it, add it to your `.gitignore`.
 
+### Removing the Claude Code integration
+
+```bash
+axiom uninstall             # remove from this project
+axiom uninstall --global    # remove from ~/.claude/settings.json
+axiom uninstall --dry-run   # show the settings that would be written
+```
+
+Uninstall removes the four hooks `axiom init` writes, and the telemetry variables
+when the whole set still holds the values an install writes and points at a local
+receiver on a loopback address. Nothing records which tool wrote a setting, so
+what Axiom cannot recognize that way it leaves alone: your own hooks, an export
+pointing at a collector anywhere else, and every other setting stay as they are.
+Running it when Axiom is not installed succeeds and changes nothing.
+
+The settings file itself is never deleted, even when Axiom was the only thing in
+it. Axiom does not know whether it created the file, it may be a file you keep in
+a dotfiles repository, and an empty `{}` costs nothing; the command tells you
+when the file is empty so that deleting it stays your decision.
+
+Recorded data is left alone as well. Delete the
+[data directory](#where-the-data-goes) to remove it.
+
 ## Recording usage
 
 Hooks say what the agent did. They say nothing about what it cost. Claude Code
 reports that separately, over OpenTelemetry, and `axiom observe` receives it.
+
+Telemetry is optional. Without it the profile and its findings still work, since
+both come from the events hooks write on their own. What you lose is measurement:
+read bytes per path, the output of redundant calls, and what a turn consumed are
+absent rather than zero.
 
 ```bash
 axiom init --telemetry   # configure Claude Code to export, once
@@ -590,8 +708,8 @@ OTEL_LOG_USER_PROMPTS  OTEL_LOG_ASSISTANT_RESPONSES  OTEL_LOG_TOOL_DETAILS
 OTEL_LOG_TOOL_CONTENT  OTEL_LOG_RAW_API_BODIES
 ```
 
-The receiver binds to loopback only, and Axiom still makes no outbound network
-calls of any kind.
+The receiver binds to loopback by default, and only listens elsewhere if you tell
+it to with `--addr`. Axiom still makes no outbound network calls of any kind.
 
 ## What Axiom cannot see
 
@@ -641,11 +759,23 @@ make lint    # gofmt check + go vet
 make run     # go run ./cmd/axiom
 ```
 
-Release builds can override the version string:
+Release artifacts come from one script, which CI runs on every change so the
+release build is never the first time all four platforms are compiled:
 
 ```bash
-go build -ldflags "-X github.com/exequieldeferrari/axiom/internal/version.Version=v1.2.3" -o bin/axiom ./cmd/axiom
+scripts/build-release.sh v0.1.0 dist          # archives and checksums
+tar -xzf dist/axiom_0.1.0_darwin_arm64.tar.gz -C dist/unpacked
+scripts/release-check.sh dist/unpacked/axiom v0.1.0
 ```
+
+`scripts/release-check.sh` exercises a packaged binary end to end — install,
+uninstall, hook ingestion, the receiver, and the profile it produces — in a
+temporary data directory, without Claude Code and without touching your own
+settings or data.
+
+`axiom version` reports `dev` for a build from a checkout, the version Go
+resolved for one installed with `go install`, and the stamped version for a
+release artifact.
 
 Architecture decisions are recorded in [docs/adr](docs/adr).
 

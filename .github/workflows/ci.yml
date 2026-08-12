@@ -35,4 +35,20 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
+
+      # The release builds every supported platform from this script, so a
+      # change that breaks one is caught on the pull request that made it
+      # rather than at the tag.
+      #
+      # The stamp is not a release version, and release-version.sh would reject
+      # it. That is the intended split: this proves the build, not a release, and
+      # an archive from a pull request should not name itself something publishable.
+      - name: Cross-compile the release targets
+        run: ./scripts/build-release.sh v0.0.0-ci "$(mktemp -d)"
+
+      # The guard that decides which tags may become a release is the one piece
+      # of release logic that is only ever exercised by a tag, so it is checked
+      # here instead.
+      - name: Check the release version guard
+        run: ./scripts/release-version.sh --self-test
