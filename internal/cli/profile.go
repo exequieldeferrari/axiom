@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,22 +14,67 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/correlate"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/store"
+	"github.com/exequieldeferrari/axiom/internal/timeline"
 )
 
 // runProfile analyzes the recorded event log. It never writes to it.
 func runProfile(args []string, stdout io.Writer) error {
-	if len(args) > 0 {
-		return &UsageError{Msg: fmt.Sprintf("unexpected argument %q", args[0])}
+	opts, err := parseProfileFlags(args)
+	if err != nil {
+		return err
 	}
 
 	dir, err := store.DefaultDir()
 	if err != nil {
 		return err
 	}
-	return profileLog(dir, stdout)
+	return profileLog(dir, opts, stdout)
 }
 
-func profileLog(dir string, stdout io.Writer) error {
+// profileOptions selects what a report covers.
+type profileOptions struct {
+	// session limits the analysis to one session identity. Empty analyzes the
+	// whole log, which is the default and is unchanged by this option
+	// existing.
+	session string
+}
+
+func parseProfileFlags(args []string) (profileOptions, error) {
+	flags := flag.NewFlagSet("profile", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	var opts profileOptions
+	flags.StringVar(&opts.session, "session", "", "analyze only the events recorded for one session identity")
+
+	if err := flags.Parse(args); err != nil {
+		return opts, &UsageError{Msg: err.Error()}
+	}
+	if rest := flags.Args(); len(rest) > 0 {
+		return opts, &UsageError{Msg: fmt.Sprintf("unexpected argument %q", rest[0])}
+	}
+	// An empty value is refused rather than treated as no selection at all. A
+	// caller whose variable was empty asked for one session and would
+	// otherwise be given a report of every session, saying nothing about the
+	// difference.
+	if asked(flags, "session") && opts.session == "" {
+		return opts, &UsageError{Msg: "--session needs a session identifier"}
+	}
+	return opts, nil
+}
+
+// asked reports whether a flag was given on the command line, as opposed to
+// holding its default.
+func asked(flags *flag.FlagSet, name string) bool {
+	given := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+	return given
+}
+
+func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 	scanner, err := store.ScanEvents(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprint(stdout, "No events recorded yet.\nRun 'axiom init', then use Claude Code.\n")
@@ -49,17 +95,51 @@ func profileLog(dir string, stdout io.Writer) error {
 			SessionID: session, TurnID: turn, InvocationID: invocation,
 		})
 	})
+	t := timeline.New()
+
+	analyzed := 0
 	for scanner.Scan() {
 		record := scanner.Record()
+		// A session is selected by the identifier the agent recorded, exactly.
+		// Matching a prefix would silently analyze a different session that
+		// happened to start the same way.
+		if opts.session != "" && record.SessionID != opts.session {
+			continue
+		}
+		analyzed++
 		p.Add(record)
 		a.Add(record)
+		t.Add(record)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
 
+	// An identifier that matched nothing is a mistake worth naming. Reporting
+	// an empty profile instead would look like a session that did no work.
+	if opts.session != "" && analyzed == 0 {
+		fmt.Fprintf(stdout, "No events recorded for session %q.\n", opts.session)
+		// A record Axiom could not decode cannot be attributed to a session,
+		// so one of them may have been this one. Saying nothing here would
+		// turn "not found" into a stronger claim than the log supports.
+		if skipped := scanner.Stats().Skipped(); skipped > 0 {
+			fmt.Fprintf(stdout, "%s skipped and could not be attributed to any session.\n",
+				plural(skipped, "record"))
+		}
+		fmt.Fprint(stdout, "Run 'axiom profile' to see the sessions in the log.\n")
+		return nil
+	}
+
 	report := p.Report()
-	writeReport(stdout, report, a.Profile(), usage.index.Measure(report.Findings), scanner.Stats(), usage)
+	writeReport(stdout, reportInput{
+		findings: report,
+		activity: a.Profile(),
+		context:  t.Report(),
+		measured: usage.index.Measure(report.Findings),
+		stats:    scanner.Stats(),
+		usage:    usage,
+		scope:    opts,
+	})
 	return nil
 }
 
@@ -128,22 +208,47 @@ const (
 	// The scope is filled in by consumptionScope, and the break keeps the
 	// longest of them inside the report's width.
 	associationCaveat = "This is the observed model consumption\nfor %s, not the cost of the repetition.\n"
-	scopeExplanation  = "Analysis is scoped to a single session and subagent: work repeated in a\nlater session is not counted, because the agent's context may legitimately\nhave been lost in between.\n"
+	// The scope is stated as the session and the reset rather than as the
+	// epoch, because the two are not the same in every log: the profiler ends
+	// its runs at recorded starts, and an epoch above may also have been
+	// closed by a session end, which ends no run.
+	scopeExplanation  = "Analysis is scoped to a single session and subagent, and every recorded\ncontext reset ends it: work repeated after a reset, or in a later session,\nis not counted, because the agent's context may legitimately have been lost\nin between.\n"
 	observedCaveat    = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
 	measuredCaveat    = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
 	failureCaveat     = "A repeated failed attempt is one shell command tried again after it failed,\nwithin a single turn, with nothing in between that Axiom can see changing\nstate. The same observed failure means the agent reported the failures\nidentically, not that they had the same cause. Where a later attempt was\nobserved succeeding it is reported as that and nothing more: what came\nbetween is not evidence of what made the difference.\n"
 	noFindingsMessage = "  No high-confidence redundant work or repeated failed attempts detected.\n"
 )
 
-func writeReport(w io.Writer, r profiler.Report, p activity.Profile, findings []correlate.Measured, stats store.ScanStats, usage usageLog) {
+// reportInput is everything one report is written from.
+type reportInput struct {
+	findings profiler.Report
+	activity activity.Profile
+	context  timeline.Report
+	measured []correlate.Measured
+	stats    store.ScanStats
+	usage    usageLog
+	scope    profileOptions
+}
+
+func writeReport(w io.Writer, in reportInput) {
+	r, usage, findings := in.findings, in.usage, in.measured
+
 	fmt.Fprint(w, "Axiom Profile\n─────────────\n\n")
+	// Printed only where the analysis covered less than the log, so that a
+	// whole-log report reads exactly as it did before selection existed.
+	if in.scope.session != "" {
+		fmt.Fprintf(w, "%-*s%s\n", countLabelWidth, "Scope", "session "+in.scope.session)
+	}
 	count(w, "Events", r.Events)
 	count(w, "Sessions analyzed", r.Sessions)
 	count(w, "Tool calls", r.ToolCalls)
 
-	if skipped := stats.Skipped(); skipped > 0 {
+	// Skipped records are counted for the whole log, whether or not the report
+	// was scoped to one session. A record Axiom could not decode cannot be
+	// attributed to a session: what was lost is exactly what would have said.
+	if skipped := in.stats.Skipped(); skipped > 0 {
 		fmt.Fprintf(w, "\nWarning: %s skipped (%s); findings may be incomplete.\n",
-			plural(skipped, "record"), describeSkipped(stats))
+			plural(skipped, "record"), describeSkipped(in.stats))
 	}
 	// A usage record Axiom cannot read costs a measurement, not a finding.
 	if skipped := usage.stats.Skipped(); skipped > 0 {
@@ -158,7 +263,8 @@ func writeReport(w io.Writer, r profiler.Report, p activity.Profile, findings []
 			usage.unreadable)
 	}
 
-	writeActivity(w, p)
+	writeTimeline(w, in.context)
+	writeActivity(w, in.activity)
 
 	fmt.Fprint(w, "\nFindings\n\n")
 	if len(findings) == 0 {

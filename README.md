@@ -362,6 +362,15 @@ Events              21
 Sessions analyzed   1
 Tool calls          17
 
+Context epochs
+
+  session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2  ·  2 epochs
+    first recorded 2026-08-10 20:25:04 UTC
+    1  opened by startup, ended by a context reset
+       12 tool calls, 3 turns with work
+    2  opened by compact, ended with the session (clear)
+       5 tool calls, 2 turns with work
+
 Observed operations
 
   File              8   read, written or edited; attributed by path below
@@ -381,9 +390,10 @@ Findings
   No high-confidence redundant work or repeated failed attempts detected.
 ```
 
-The report has two halves that answer different questions. The profile above
-describes the work Axiom observed and where it happened; the findings below judge
-some of it. The captions each section prints are left out of this example.
+The report answers three different questions in order: what the agent's context
+was, what work was observed and where it happened, and which of that work Axiom
+is prepared to judge. The captions each section prints are left out of this
+example.
 
 A quiet findings section is a real result. Axiom would rather miss redundant work
 than invent it, so it only reports repetition it can justify:
@@ -396,6 +406,63 @@ than invent it, so it only reports repetition it can justify:
          Command digest                    3f1c0a9e77b4…
          Window                            2026-08-10 20:25:04 → 20:29:11 UTC
 ```
+
+### Context epochs
+
+A **context epoch** is the work recorded for one session identity between the
+points where the agent reported starting a context. Those starts are the only
+boundaries Axiom infers anything from, and they are the same ones the findings
+below are scoped by: repetition is never compared across a reset. Reading the
+epochs first is what tells you whether a quiet findings section describes a clean
+run or a run whose evidence was cut into pieces by resets.
+
+Membership follows the order records were appended, never their timestamps. Hooks
+run as parallel processes, so recorded times can arrive out of order; the one time
+printed per session is the earliest recorded for it, and it is there to help you
+recognize the session, not to order anything.
+
+Axiom reports the source the agent gave for each start, as it gave it. In Claude
+Code 2.1.228 these were observed:
+
+| Recorded start | What was observed |
+| --- | --- |
+| `startup` | A session beginning. |
+| `compact` | Context compacted, keeping the same session ID. Observed on `/compact`, and automatically when the window was lowered to force it early — which changed when compaction ran, not what it recorded. Automatic compaction was observed opening a context in the middle of a turn. |
+| `resume` | A session continued under the same session ID. |
+| `clear` | `/clear`, which ends the session with reason `clear` and starts the next one under a **new** session ID. |
+| `fork` | A session forked, under a new session ID. |
+
+A source Axiom has never seen is printed as itself. Three states are kept apart
+rather than blurred into "unknown": a start whose source the agent reported, a
+start that carried no source, and no start at all — which is what a log holds
+when Axiom began recording after the session had already started.
+
+**Axiom never links two session identities.** One appearing after another is the
+order they were recorded in and nothing more. That is why `/clear` shows up as two
+sessions and compaction shows up as two epochs of one: those are the facts the log
+contains, and "the same sitting" is not among them.
+
+An epoch with nothing recorded after it is the last thing the log holds for that
+session. It is not a claim that the agent is still running. An epoch where nothing
+happened is still shown, because a reset that was followed by no work is a reset
+that happened.
+
+The epochs are a **lower bound** on the resets that occurred: they are the ones
+the agent reported to a hook Axiom had installed, in the version it was running.
+A context reset the agent performed without announcing it leaves nothing in the
+log, and nothing here would show it.
+
+Turns are counted **within** each epoch. A turn can span a reset, so those counts
+overlap and are never added into a session total.
+
+To analyze one session on its own, pass the identifier the report prints:
+
+```console
+$ axiom profile --session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
+```
+
+The match is exact — a prefix selects nothing — and the report says what it was
+scoped to. Without the flag, the whole log is analyzed, exactly as before.
 
 ### Observed work
 
@@ -445,10 +512,10 @@ below.
 
 ### What Axiom will and will not call redundant
 
-Repetition only counts inside a single session, and inside a single subagent
-within it. A later session legitimately redoes work because the agent no longer
-remembers it, so cross-session repetition is never reported. The same applies
-when Claude Code compacts or clears context mid-session.
+Repetition only counts inside a single session, within a single subagent, and
+never across a [context reset](#context-epochs). A later session legitimately
+redoes work because the agent no longer remembers it, and so does the same
+session after compaction, so neither is ever reported as repetition.
 
 A repeated **shell command** is reported when the same command digest runs more
 than once with nothing but read-only operations in between. Any file edit, any
@@ -723,8 +790,13 @@ read:
   fail visibly, so "no failures" means none were recorded, not that nothing
   went wrong.
 - **Sessions may have no end.** If the agent is killed, no `SessionEnd` arrives.
-- **A session is not a unit of work.** Claude Code starts a new session on
-  `/clear` and after compaction, so one sitting can span several session IDs.
+- **A session is not a unit of work.** Claude Code was observed keeping the
+  session ID across compaction and resume, and reporting a new one on `/clear`
+  and on a fork. One sitting can span several session IDs, one session ID can
+  span several contexts, and nothing recorded links one ID to another.
+- **An execution is not observable.** Axiom can derive session identities,
+  context epochs and turns, and none of them means "one attempt at one task".
+  Comparing two runs needs a unit somebody asserts; Axiom does not invent one.
 - **Durations exclude waiting on you.** Claude Code reports tool execution time,
   not the time spent in permission prompts.
 - **Recorded order only approximates execution order.** Hooks run as parallel
