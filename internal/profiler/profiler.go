@@ -96,9 +96,12 @@ func (p *Profiler) Add(ev event.Event) {
 
 	switch ev.Type {
 	case event.TypeSessionStart:
-		// Claude Code starts a session on compaction and on /clear. One
-		// arriving for a session already under way means the agent's context
-		// was reset, so earlier operations are no longer part of it.
+		// A start arriving for a session already under way means the agent's
+		// context was reset, so earlier operations are no longer part of it.
+		// Compaction was observed doing that under the same session
+		// identifier, on /compact and automatically. A /clear reports a new
+		// identifier instead, which puts the work in a different scope
+		// already.
 		p.reset(ev.SessionID)
 	case event.TypeToolCall:
 		if ev.Tool != nil {

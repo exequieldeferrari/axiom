@@ -32,8 +32,15 @@ func seed(t *testing.T, events ...event.Event) string {
 func profileOutput(t *testing.T, dir string) string {
 	t.Helper()
 
+	return scopedProfileOutput(t, dir, profileOptions{})
+}
+
+// scopedProfileOutput reports what a profile of part of the log says.
+func scopedProfileOutput(t *testing.T, dir string, opts profileOptions) string {
+	t.Helper()
+
 	var out bytes.Buffer
-	if err := profileLog(dir, &out); err != nil {
+	if err := profileLog(dir, opts, &out); err != nil {
 		t.Fatalf("profileLog: %v", err)
 	}
 	return out.String()
@@ -109,7 +116,7 @@ func TestProfileReportsCleanSession(t *testing.T) {
 		"Sessions analyzed   2",
 		"Tool calls          3",
 		"No high-confidence redundant work or repeated failed attempts detected.",
-		"scoped to a single session",
+		"scoped to a single session and subagent, and every recorded",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q:\n%s", want, out)

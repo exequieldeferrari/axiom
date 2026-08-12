@@ -31,8 +31,11 @@ const (
 // Event is a single observation about an agent.
 //
 // SessionID is the agent's own session identifier and is not a durable unit of
-// work: Claude Code, for example, starts a new session on /clear and on
-// compaction. Analysis that needs "one sitting" must reconstruct it.
+// work. Claude Code was observed keeping it across compaction and across a
+// resume, and reporting a new one on /clear and on a fork: one sitting can span
+// several identifiers, and one identifier can span several contexts. Analysis
+// that needs "one sitting" has to reconstruct it, and nothing recorded links one
+// identifier to another.
 type Event struct {
 	SchemaVersion int       `json:"schema_version"`
 	Agent         string    `json:"agent"`
