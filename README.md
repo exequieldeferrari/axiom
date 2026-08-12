@@ -9,7 +9,8 @@
 </p>
 
 <p align="center">
-  Find wasted context, redundant work, failure loops, and unnecessary cost.
+  Reconstruct what a coding agent actually did — its turns, its context resets,
+  the work it delegated — and report only what the record establishes.
 </p>
 
 <p align="center">
@@ -19,23 +20,26 @@
 ## Why Axiom?
 
 Most tooling can tell you *how much* an agent consumed: tokens, dollars,
-minutes. That number tells you a bill was large. It does not tell you which
-part of the session was avoidable.
+minutes. That number tells you a bill was large. It does not tell you what the
+agent was doing while it ran one up.
 
-Axiom aims to explain *why*. The same file read six times without changing, the
-same search repeated across three turns, a command that failed and was retried
-four ways: these are the things that turn a small task into an expensive one,
-and they are only visible if something is recording what the agent actually
-did.
+Axiom reconstructs the execution instead. From hook events and the agent's own
+telemetry it derives structure nothing in the raw stream states — the context
+epochs a session was cut into, the turns that recorded work, the nested agents
+a turn launched and the calls those agents went on to make — and then reports
+observations against that structure: the same file read on both sides of a
+context reset, one file read in two agent scopes a launch relates, a command
+that failed three times, the calls recorded before it later succeeded.
 
-Axiom makes no claims about token savings. It is being built to measure first
-and recommend second.
+Every line is bounded by the record. Where the log does not establish something,
+Axiom says so rather than estimating it, and it never calls observed work
+wasted, avoidable, or saved. Nothing is sent anywhere.
 
 ## Status
 
-Early. Axiom **records** agent activity, **profiles** where that work happened,
-and reports the **repeated work** and **repeated failed attempts** it can prove
-from the record.
+Early. Axiom **records** agent activity, **derives** the structure of the
+execution from it — context epochs, turns, and delegated agent scopes — and
+reports the observations and findings it can establish from the record.
 
 What works today:
 
@@ -47,34 +51,48 @@ What works today:
   it happened at
 - The session identities in the log, and the context epochs recorded within them
 - The paths read again in a later context epoch of one session identity
+- The recorded turns of a session: the work each one did, and the consumption
+  observed in it
+- The subagent launches a turn made, and the recorded calls each launched agent
+  went on to make
+- The paths read in more than one agent scope that a recorded launch relates
 - Measured read bytes per path, when a receiver recorded them
 - A profiler that reports repeated shell commands and repeated file reads
-- Repeated failed attempts at the same shell command
+- Repeated failed attempts at the same shell command, and what each attempt's
+  failure report carried
 - The tool calls recorded between a failed attempt and a later observed success
 - Measured tool output for redundant calls, when a receiver recorded it
 - The consumption observed in the turns a finding happened in
 
 Not built yet: repeated-search detection, recommendations, comparison between
-executions, and support for agents other than Claude Code. Axiom reports
-consumption it observed but does not attribute it, and makes no savings claims.
-Nothing observed across a context epoch boundary is measured in bytes, tokens or
-cost: a size printed beside it would read as the price of the boundary, which
-nothing recorded establishes.
+executions or configurations, and support for agents other than Claude Code.
+Axiom reports consumption it observed but does not attribute it, and makes no
+savings claims. Nothing observed across a context epoch boundary or across two
+agent scopes is measured in bytes, tokens or cost: a size printed beside it
+would read as the price of the boundary, which nothing recorded establishes.
 
-### v0.1.0
+### v0.3.0
 
-The first public 0.x release. It means this narrow workflow — observe Claude
-Code, then profile what it did — is installable, reversible, and works end to
-end, with the evidence semantics described below. It does not mean a stable CLI,
-a schema that will not change, completeness, or readiness for anything beyond one
-developer's own machine. The `0.` is where the instability is stated: expect the
-interface to move before 1.0.
+The third 0.x release. v0.1.0 made the workflow installable; v0.2.0 added the
+context epochs a session was cut into; v0.3.0 is where the report describes the
+*structure* of an execution rather than a flat log — the turns that recorded
+work, the subagent launches inside them, the calls each launched agent made, and
+the paths read across scopes that a launch relates.
+
+It does not mean a stable CLI, a schema that will not change, completeness, or
+readiness for anything beyond one developer's own machine. The `0.` is where the
+instability is stated: expect the interface to move before 1.0.
 
 Worth knowing before you try it:
 
 - `axiom profile` reads the whole recorded log. There is no session or time
-  filter yet, so a log that has been accumulating reports all of it.
+  filter beyond `--session`, so a log that has been accumulating reports all of
+  it.
 - The CLI and the JSONL schema may change before 1.0.
+- Delegation is only as visible as the agent makes it. A launch relates scopes
+  only where the agent returned an identity for the nested agent it created;
+  events recorded by an earlier Axiom carry none, and those launches relate
+  nothing rather than being guessed at.
 - Measured bytes and model consumption exist only for the time a receiver was
   running; everywhere else they are absent, which is not zero.
 - Claude Code is the only agent with an adapter.
@@ -166,8 +184,14 @@ optimize anything, and it never changes what your agent does.
 
 Axiom groups work into turns using the `prompt_id` Claude Code sends with each
 hook event. Versions before 2.1.196 do not send it, and the findings that depend
-on a turn are unreliable without it. v0.1.0 was verified against Claude Code
-2.1.228; later versions are expected to work but are not covered by that check.
+on a turn are unreliable without it. Every capture behind v0.3.0 was made
+against Claude Code 2.1.228; later versions are expected to work but are not
+covered by that check.
+
+The delegation sections depend on more than `prompt_id`: a launch relates
+scopes only where Claude Code returned an identity for the nested agent it
+created, and reported that same identity on the calls that agent made. Where it
+did not, the sections say so rather than relating scopes on timing.
 
 Windows is untested and no Windows archive is published. The code compiles for
 it, but nothing about its paths or its settings locations has been exercised
@@ -181,7 +205,7 @@ Download the archive for your platform from the
 [latest release](https://github.com/exequieldeferrari/axiom/releases/latest):
 
 ```bash
-tar -xzf axiom_0.1.0_darwin_arm64.tar.gz
+tar -xzf axiom_0.3.0_darwin_arm64.tar.gz
 sudo mv axiom /usr/local/bin/
 axiom version
 ```
@@ -191,8 +215,8 @@ publishes `checksums.txt` beside them, listing all four archives, so verify the
 line for the one you downloaded:
 
 ```bash
-grep axiom_0.1.0_darwin_arm64.tar.gz checksums.txt | shasum -a 256 -c
-# On Linux: grep axiom_0.1.0_linux_amd64.tar.gz checksums.txt | sha256sum -c
+grep axiom_0.3.0_darwin_arm64.tar.gz checksums.txt | shasum -a 256 -c
+# On Linux: grep axiom_0.3.0_linux_amd64.tar.gz checksums.txt | sha256sum -c
 ```
 
 On macOS, download with `curl` rather than a browser. A browser marks the file
@@ -207,7 +231,7 @@ stop working when that directory goes away — Axiom refuses to install one.
 ### With Go
 
 ```bash
-go install github.com/exequieldeferrari/axiom/cmd/axiom@v0.1.0
+go install github.com/exequieldeferrari/axiom/cmd/axiom@v0.3.0
 ```
 
 The binary lands in `$(go env GOPATH)/bin` and reports the version it was
@@ -1125,6 +1149,15 @@ the schema lives in one of three places (`cwd`, `tool.metadata.file.path`, and
 Metadata extraction is an allowlist. Tools Axiom has not explicitly reviewed,
 including every MCP tool, contribute no metadata at all.
 
+**Read from a tool's response:** one field, of one tool. A subagent launch
+returns an opaque identifier for the nested agent it created, and Axiom stores
+that identifier so the calls the agent goes on to make can be recognized as
+its own. Nothing else in a response is read — not the prompt the nested agent
+was given, not its answer, not its description, output path, token usage or
+tool counts — and the identifier is never printed in the report. The type a
+launch declares for its agent is recorded, and also never reported: it is an
+open, author-defined string.
+
 ### Telemetry privacy
 
 Claude Code attaches your email address, user and account identifiers, your
@@ -1172,6 +1205,12 @@ read:
 - **An execution is not observable.** Axiom can derive session identities,
   context epochs and turns, and none of them means "one attempt at one task".
   Comparing two runs needs a unit somebody asserts; Axiom does not invent one.
+- **A nested agent is visible only through what the agent reported.** A launch
+  is recorded once its call returns, so a log that begins mid-turn holds nested
+  work with no launch in it; a launch whose record carried no returned agent
+  identity relates nothing; and what a subagent consumed is not part of the
+  launching turn's observed consumption. None of these are treated as evidence
+  that a nested agent did nothing.
 - **A context epoch boundary is not proof that context was discarded.** It is a
   boundary the log recorded. An epoch also ends where a session ends, which
   discards nothing, and a reset the agent never reported leaves no boundary at
@@ -1214,9 +1253,9 @@ Release artifacts come from one script, which CI runs on every change so the
 release build is never the first time all four platforms are compiled:
 
 ```bash
-scripts/build-release.sh v0.1.0 dist          # archives and checksums
-tar -xzf dist/axiom_0.1.0_darwin_arm64.tar.gz -C dist/unpacked
-scripts/release-check.sh dist/unpacked/axiom v0.1.0
+scripts/build-release.sh v0.3.0 dist          # archives and checksums
+tar -xzf dist/axiom_0.3.0_darwin_arm64.tar.gz -C dist/unpacked
+scripts/release-check.sh dist/unpacked/axiom v0.3.0
 ```
 
 `scripts/release-check.sh` exercises a packaged binary end to end — install,
