@@ -21,6 +21,15 @@ const (
 // MCP tool, contributes no metadata at all: a denylist would leak the first
 // time an agent gained a tool we had not reviewed.
 func extractMetadata(toolName string, input json.RawMessage) *event.ToolMetadata {
+	// A launch is recognized from the tool that made it, so it is settled
+	// before the input is consulted at all: what the input carries describes a
+	// launch that already happened, and every other operation here is
+	// recognized from a value only the input holds.
+	switch toolName {
+	case toolAgent, toolTask:
+		return subagentMetadata(input)
+	}
+
 	if len(input) == 0 {
 		return nil
 	}
@@ -38,8 +47,6 @@ func extractMetadata(toolName string, input json.RawMessage) *event.ToolMetadata
 		return searchMetadata(input, event.SearchContent)
 	case "Glob":
 		return searchMetadata(input, event.SearchFilename)
-	case toolAgent, toolTask:
-		return subagentMetadata(input)
 	default:
 		return nil
 	}
@@ -122,14 +129,31 @@ func searchMetadata(input json.RawMessage, kind string) *event.ToolMetadata {
 	}}
 }
 
+// subagentMetadata records that a call handed work to a nested agent, and the
+// type it declared for that agent where one was recorded.
+//
+// The tool is the evidence that a launch happened, and the declared type is
+// description carried beside it. A capture against Claude Code 2.1.228
+// produced a launch whose input held `description` and `prompt` and no
+// `subagent_type`: it returned an agent identity, and the calls its agent made
+// reported that identity. Requiring the type turned that launch into a call
+// Axiom could not describe, which lost it from every count of launches and
+// left its nested work with no launch to belong to.
+//
+// So a type Axiom cannot read leaves the type empty and never the launch
+// absent, and nothing is inferred to fill it: not the description, not the
+// prompt, not the type the response reported. An empty type is what the record
+// says, which is that a launch was made and did not declare one.
 func subagentMetadata(input json.RawMessage) *event.ToolMetadata {
+	op := &event.SubagentOp{}
+
 	var in struct {
 		SubagentType string `json:"subagent_type"`
 	}
-	if json.Unmarshal(input, &in) != nil || in.SubagentType == "" {
-		return nil
+	if json.Unmarshal(input, &in) == nil {
+		op.Type = in.SubagentType
 	}
-	return &event.ToolMetadata{Subagent: &event.SubagentOp{Type: in.SubagentType}}
+	return &event.ToolMetadata{Subagent: op}
 }
 
 // subagentResult takes the nested agent's identity out of a launch's response.

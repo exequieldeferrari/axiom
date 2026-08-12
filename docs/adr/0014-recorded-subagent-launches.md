@@ -1,7 +1,23 @@
 # 14. Recorded subagent launches
 
-- Status: accepted
+- Status: accepted, with one observation corrected below
 - Date: 2026-08-12
+
+> **Correction.** The observation below headed *`subagent_type` is supplied, on
+> every launch* was true of every launch this ADR's capture produced and is not
+> true in general. A later capture, against Claude Code 2.1.228, recorded an
+> `Agent` call whose `tool_input` held `description` and `prompt` and no
+> `subagent_type`. It returned an agent identity, and a recorded call reported
+> that identity.
+>
+> The adapter required the type to derive `metadata.subagent`, so that launch
+> reached the log as a call Axiom could not describe: it was missing from
+> *Subagent launches* and from *Observed operations*, and the work of the agent
+> it started was reported as nested work no recorded launch accounts for. The
+> adapter now derives `metadata.subagent` from the tool alone and leaves the
+> type empty where none was recorded. Every decision below is unchanged,
+> including recognizing a launch from the metadata rather than from the tool
+> name downstream, and the type still being recorded and not reported.
 
 ## Context
 
@@ -29,10 +45,11 @@ non-interactive runs produced 8 `Agent` calls: two launched in parallel in one
 turn, three sequential, one launched in the background, one type defined for the
 run, one deliberately invalid type, and two single launches.
 
-**`subagent_type` is supplied, on every launch.** `tool_input` carries
-`description`, `prompt`, `run_in_background` and `subagent_type`. All 8 launches
-carried it, including the one that failed. ADR 0013's claim that the field is
-absent is false.
+**`subagent_type` is supplied, on every launch.** *(Corrected above: a later
+capture recorded a launch that carried none, so this holds of these 8 launches
+and not of launches in general.)* `tool_input` carries `description`, `prompt`,
+`run_in_background` and `subagent_type`. All 8 launches carried it, including
+the one that failed. ADR 0013's claim that the field is absent is false.
 
 **The adapter records it correctly.** All 8 reached `events.jsonl` carrying
 `metadata.subagent`, with the type verbatim.

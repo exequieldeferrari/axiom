@@ -97,6 +97,15 @@ var shapes = []struct {
 		&event.ToolMetadata{Subagent: &event.SubagentOp{Type: "general-purpose"}},
 		"subagent",
 	},
+	{
+		// A launch that declared no type is a launch. The type is what the
+		// input said the delegation was, and a launch was observed carrying
+		// none, so neither classifier may read its absence as a call it
+		// cannot describe.
+		"subagent launch with no declared type",
+		&event.ToolMetadata{Subagent: &event.SubagentOp{}},
+		"subagent",
+	},
 }
 
 func intp(n int) *int { return &n }
