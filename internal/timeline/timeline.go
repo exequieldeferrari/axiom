@@ -78,6 +78,34 @@ type Closing struct {
 	Reason string
 }
 
+// EpochRef names one context epoch.
+//
+// It is the identity of an epoch and holds nothing about what the epoch
+// contains, so a record can carry it without carrying the epoch's counts.
+type EpochRef struct {
+	SessionID string
+	// Ordinal counts epochs within a session identity from 1, in append
+	// order, matching Epoch.Ordinal. It is not comparable across session
+	// identities.
+	Ordinal int
+}
+
+// Placement is the epoch a record was placed in.
+//
+// It is produced by the state machine as the record is observed, which is the
+// only way epoch membership can be established: membership follows append
+// order, and recorded times are not monotonic, so a window comparison made
+// afterwards would place records by something the log does not establish.
+type Placement struct {
+	Epoch   EpochRef
+	Opening Opening
+	// Placed reports whether the record belongs to an epoch at all. A record
+	// with no session identity, a session end that closed nothing, and a
+	// record this version cannot interpret belong to none, and an analysis
+	// must not invent one for them.
+	Placed bool
+}
+
 // Epoch is one context epoch of one session identity.
 type Epoch struct {
 	// Ordinal counts epochs within a session identity from 1, in append
@@ -157,12 +185,17 @@ func New() *Timeline {
 	return &Timeline{sessions: make(map[string]*sessionState)}
 }
 
-// Add records one event. Events must arrive in append order, which is the order
-// they were written and the only order the log guarantees.
-func (t *Timeline) Add(ev event.Event) {
+// Add records one event and reports the epoch it was placed in. Events must
+// arrive in append order, which is the order they were written and the only
+// order the log guarantees.
+//
+// The placement is returned rather than stored so that an analysis which needs
+// epoch membership takes it from the same pass that derived the structure. A
+// caller that only wants the structure ignores the result.
+func (t *Timeline) Add(ev event.Event) Placement {
 	if ev.SessionID == "" {
 		t.unidentified++
-		return
+		return Placement{}
 	}
 
 	// A session identity is only recorded once something places it: a
@@ -180,28 +213,41 @@ func (t *Timeline) Add(ev event.Event) {
 		// place the boundary: it reports the source it was given.
 		s.close(Closing{Kind: ClosingReset})
 		s.begin(opening(detail(ev).Source), ev.Timestamp)
+		// The start belongs to the epoch it opens, which is what makes an
+		// epoch that recorded nothing else still observable as an epoch.
+		return s.placement(ev.SessionID)
 
 	case event.TypeSessionEnd:
 		s := t.session(ev.SessionID)
 		if s.current == nil {
 			s.endsWithoutEpoch++
-			return
+			return Placement{}
 		}
 		s.current.mark(ev.Timestamp)
+		// The end belongs to the epoch it closes, so the placement is taken
+		// before closing: afterwards there is no open epoch to name.
+		at := s.placement(ev.SessionID)
 		s.close(Closing{Kind: ClosingEnded, Reason: detail(ev).Reason})
+		return at
 
 	case event.TypeToolCall:
 		// A tool_call carrying no call is not work Axiom can describe, and it
 		// does not open a context: structure follows observed work.
 		if ev.Tool == nil {
-			return
+			return Placement{}
 		}
 		s := t.session(ev.SessionID)
 		if s.current == nil {
 			s.begin(Opening{Kind: OpeningAbsent}, ev.Timestamp)
 		}
 		s.observe(ev)
+		return s.placement(ev.SessionID)
 	}
+
+	// A record this version cannot interpret places nothing. It named a
+	// session, which the counts above report, and saying which epoch it
+	// belonged to would be describing a record Axiom could not read.
+	return Placement{}
 }
 
 // Report summarizes everything added so far. It does not consume the timeline:
@@ -285,6 +331,20 @@ func (s *sessionState) observe(ev event.Event) {
 	// work: the turn it belonged to was never established.
 	if ev.TurnID != "" {
 		e.turns[ev.TurnID] = struct{}{}
+	}
+}
+
+// placement names the epoch currently open, which is the one a record being
+// observed belongs to.
+//
+// The ordinal is derived the same way epochs assigns it — the position of the
+// epoch in the session — so a placement and the report cannot disagree: closed
+// epochs keep their order and the open one is always last.
+func (s *sessionState) placement(id string) Placement {
+	return Placement{
+		Epoch:   EpochRef{SessionID: id, Ordinal: len(s.closed) + 1},
+		Opening: s.current.opening,
+		Placed:  true,
 	}
 }
 

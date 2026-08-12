@@ -79,7 +79,7 @@ Commands:
   init        Install the Claude Code integration
   uninstall   Remove the Claude Code integration
   observe     Record agent telemetry while you work
-  profile     Analyze recorded events and report redundant work
+  profile     Analyze recorded events and report what they establish
   hook        Record an agent event (invoked by agent hooks, not by hand)
   help        Show this help message
   version     Print the axiom version

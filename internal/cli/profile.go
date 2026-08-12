@@ -13,6 +13,7 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/activity"
 	"github.com/exequieldeferrari/axiom/internal/correlate"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
+	"github.com/exequieldeferrari/axiom/internal/reacquire"
 	"github.com/exequieldeferrari/axiom/internal/store"
 	"github.com/exequieldeferrari/axiom/internal/timeline"
 )
@@ -96,6 +97,7 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		})
 	})
 	t := timeline.New()
+	q := reacquire.New()
 
 	analyzed := 0
 	for scanner.Scan() {
@@ -109,7 +111,10 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		analyzed++
 		p.Add(record)
 		a.Add(record)
-		t.Add(record)
+		// Epoch membership comes from the timeline as it observes the record,
+		// in the same pass, because append order is the only thing that
+		// establishes it.
+		q.Add(record, t.Add(record))
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -132,13 +137,14 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 
 	report := p.Report()
 	writeReport(stdout, reportInput{
-		findings: report,
-		activity: a.Profile(),
-		context:  t.Report(),
-		measured: usage.index.Measure(report.Findings),
-		stats:    scanner.Stats(),
-		usage:    usage,
-		scope:    opts,
+		findings:  report,
+		activity:  a.Profile(),
+		context:   t.Report(),
+		reacquire: q.Report(),
+		measured:  usage.index.Measure(report.Findings),
+		stats:     scanner.Stats(),
+		usage:     usage,
+		scope:     opts,
 	})
 	return nil
 }
@@ -221,13 +227,14 @@ const (
 
 // reportInput is everything one report is written from.
 type reportInput struct {
-	findings profiler.Report
-	activity activity.Profile
-	context  timeline.Report
-	measured []correlate.Measured
-	stats    store.ScanStats
-	usage    usageLog
-	scope    profileOptions
+	findings  profiler.Report
+	activity  activity.Profile
+	context   timeline.Report
+	reacquire reacquire.Report
+	measured  []correlate.Measured
+	stats     store.ScanStats
+	usage     usageLog
+	scope     profileOptions
 }
 
 func writeReport(w io.Writer, in reportInput) {
@@ -264,6 +271,7 @@ func writeReport(w io.Writer, in reportInput) {
 	}
 
 	writeTimeline(w, in.context)
+	writeReacquired(w, in.reacquire)
 	writeActivity(w, in.activity)
 
 	fmt.Fprint(w, "\nFindings\n\n")
