@@ -36,6 +36,7 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/crossread"
 	"github.com/exequieldeferrari/axiom/internal/delegation"
 	"github.com/exequieldeferrari/axiom/internal/event"
+	"github.com/exequieldeferrari/axiom/internal/harness"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/reacquire"
 	"github.com/exequieldeferrari/axiom/internal/store"
@@ -83,6 +84,7 @@ type Log struct {
 	Turns      turns.Report
 	Delegation delegation.Report
 	CrossRead  crossread.Report
+	Harness    harness.Report
 
 	// Composition is what the analyzed calls were, by shape. It is a
 	// complete partition of them: internal/work places every recorded call
@@ -137,6 +139,11 @@ func Analyze(dir string, opts Options) (Log, error) {
 	// and is joined to the relations delegation established when the report
 	// is taken.
 	cr := crossread.New()
+	// Provenance is read back out of the records that carry it. Nothing here
+	// observes a file: the observation happened when the session started,
+	// and taking it again now would describe this machine today and attach
+	// it to work recorded whenever the log was written.
+	hn := harness.New()
 
 	out := Log{Usage: usage}
 	for scanner.Scan() {
@@ -159,6 +166,7 @@ func Analyze(dir string, opts Options) (Log, error) {
 		tn.Add(record, at)
 		dl.Add(record)
 		cr.Add(record)
+		hn.Add(record)
 		// The same test the accumulators above apply to decide that a record
 		// carried a call. What the call was, and the counting of it, belong
 		// to internal/work.
@@ -180,6 +188,7 @@ func Analyze(dir string, opts Options) (Log, error) {
 	// rather than deriving them a second time.
 	out.Delegation = dl.Report()
 	out.CrossRead = cr.Report(out.Delegation)
+	out.Harness = hn.Report()
 	out.Stats = scanner.Stats()
 	return out, nil
 }

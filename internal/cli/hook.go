@@ -44,6 +44,10 @@ func runClaudeHook(stdin io.Reader, dataDir string, now time.Time) error {
 	if err != nil || ev == nil {
 		return nil
 	}
+	// What the agent reported is now in hand, and what it reports nothing
+	// about has to be observed while the session is starting. It is recorded
+	// on the event or not at all: nothing here can fail the append below.
+	claude.ObserveHarness(ev)
 
 	s, err := store.OpenEvents(dataDir)
 	if err != nil {

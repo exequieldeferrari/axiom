@@ -26,6 +26,28 @@ var update = flag.Bool("update", false, "rewrite the profile golden files")
 func goldenLog() []event.Event {
 	const session = "5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d"
 
+	// What one observation of a project looks like: an instruction file and
+	// the local settings Axiom installed itself into, no shared settings
+	// file, and one subagent definition. Both starts carry the same one,
+	// which is what compaction produces: the process did not restart and
+	// nothing on disk changed in between.
+	observed := func() *event.Harness {
+		return &event.Harness{Components: []event.HarnessComponent{
+			{Kind: event.HarnessProjectInstructions, Path: "CLAUDE.md",
+				Status: event.HarnessObserved,
+				Digest: "3f786850e387550fdab836ed7e6dc881de23001b5a1f4f2e30e2e0d0a1f1e2c3"},
+			{Kind: event.HarnessProjectSettings, Path: ".claude/settings.json",
+				Status: event.HarnessAbsent},
+			{Kind: event.HarnessLocalProjectSettings, Path: ".claude/settings.local.json",
+				Status: event.HarnessObserved,
+				Digest: "89e6c98d92887913cadf06b2adb97f26cde4849b1f1a0e1ad5b0d1c0b9a8f7e6"},
+			{Kind: event.HarnessSubagentDirectory, Path: ".claude/agents",
+				Status: event.HarnessObserved},
+			{Kind: event.HarnessSubagentDefinition, Path: ".claude/agents/explore.md",
+				Status: event.HarnessObserved,
+				Digest: "b3a8e0e1f9ab1bfe3a36f231f676f78bb30a519d2b21e6c530c0eee8ebb4a5d0"},
+		}}
+	}
 	start := func(source string, when time.Time) event.Event {
 		return event.Event{
 			SchemaVersion: event.SchemaVersion,
@@ -33,7 +55,9 @@ func goldenLog() []event.Event {
 			Type:          event.TypeSessionStart,
 			Timestamp:     when,
 			SessionID:     session,
-			Session:       &event.Session{Source: source, Model: "claude-opus-4"},
+			Session: &event.Session{
+				Source: source, Model: "claude-opus-4", Harness: observed(),
+			},
 		}
 	}
 	call := func(turn, subagent string, when time.Time, tool event.ToolCall) event.Event {

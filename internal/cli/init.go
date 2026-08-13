@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/exequieldeferrari/axiom/internal/claude"
+	"github.com/exequieldeferrari/axiom/internal/project"
 	"github.com/exequieldeferrari/axiom/internal/store"
 )
 
@@ -152,7 +153,7 @@ func settingsPath(global bool) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("determine the working directory: %w", err)
 		}
-		return filepath.Join(projectRoot(cwd), ".claude", "settings.local.json"), nil
+		return filepath.Join(project.Root(cwd), ".claude", "settings.local.json"), nil
 	}
 
 	dir := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -164,27 +165,4 @@ func settingsPath(global bool) (string, error) {
 		dir = filepath.Join(home, ".claude")
 	}
 	return filepath.Join(dir, "settings.json"), nil
-}
-
-// projectRoot finds the git repository root containing dir.
-//
-// Claude Code reads .claude/settings.local.json at the repository root, so
-// installing into a subdirectory would write a file it never reads. The
-// starting directory is kept outside a repository and when the repository root
-// is the home directory, matching Claude Code's own exceptions. A linked
-// worktree resolves to the worktree rather than to the main checkout, where
-// Claude Code would look.
-func projectRoot(cwd string) string {
-	home, _ := os.UserHomeDir()
-	for dir := cwd; dir != home; {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return cwd
 }

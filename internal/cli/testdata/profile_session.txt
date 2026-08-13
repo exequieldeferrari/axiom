@@ -25,6 +25,32 @@ were recorded in and nothing more.
 A turn can span a context reset, so turns with work are counted inside each
 epoch and do not add up to a session total.
 
+Observed harness provenance
+
+  session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d
+    session starts 1, 2, same observed components
+      CLAUDE.md                       observed  3f786850e387…
+      .claude/settings.json           nothing found there
+      .claude/settings.local.json     observed  89e6c98d9288…
+      .claude/agents                  enumerated, 1 definition
+        explore.md                    observed  b3a8e0e1f9ab…
+
+Harness provenance is what Axiom looked at for itself when a session start
+was recorded, at the project root it resolved from that session's working
+directory. It is a record of those exact paths at that moment and nothing
+else. Contents are never recorded: a digest is a SHA-256 of a file's exact
+bytes, taken with no normalization, and one byte of difference makes a
+different digest. A path that is a link is read only where it leads to a file
+inside the project, and where a link led is never recorded.
+
+It is not the configuration Claude Code loaded. Axiom does not observe user,
+enterprise or command-line configuration, a file reached through an import,
+plugins, skills, MCP servers, the model, or anything else the agent was
+given, and only the top level of the definitions directory is enumerated.
+Components that match establish that these paths held the same bytes: not
+that two sessions ran under the same harness, and nothing whatever about how
+either one behaved.
+
 Recorded turns
 
   session 5d1a2b3c-4e5f-4a6b-8c9d-0e1f2a3b4c5d

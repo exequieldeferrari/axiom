@@ -533,6 +533,69 @@ $ axiom profile --session 7b4d3ab1-6f0e-4b6a-9a5f-2c1d84f0e1a2
 The match is exact — a prefix selects nothing — and the report says what it was
 scoped to. Without the flag, the whole log is analyzed, exactly as before.
 
+### Observed harness provenance
+
+When a session starts, Axiom looks at a fixed, short list of project-local
+configuration paths and records what it found. That record stays with the
+session:
+
+```console
+Observed harness provenance
+
+  session ef033455-0afb-4056-9f3f-3ae4c22b895e
+    session start 1
+      CLAUDE.md                       observed  454df15524a8…
+      .claude/settings.json           nothing found there
+      .claude/settings.local.json     observed  32de9ef3733b…
+      .claude/agents                  enumerated, 1 definition
+        explore.md                    observed  4bc5b4892980…
+```
+
+The claim is exactly this: **when that session start was recorded, Axiom
+observed these paths, at the project root it resolved from that session's
+working directory, in these states.** It is a record of what Axiom looked at
+and when.
+
+It is **not the configuration Claude Code loaded**. Claude Code reports nothing
+about its own configuration to a hook — a real `SessionStart` payload carries a
+session identifier, a transcript path, a working directory, the hook name and a
+source, and nothing else — so everything here is what Axiom went and looked at
+for itself. Axiom does not observe user, enterprise or command-line
+configuration, a file reached through an `@import`, plugins, skills, MCP servers
+or what they returned, the model, or the permission mode. Only the top level of
+`.claude/agents` is enumerated, and only the paths above are selected — a
+session started in a subdirectory has a `CLAUDE.md` beside it that Claude Code
+reads and this list does not name.
+
+**A repository cannot use this to have Axiom read somewhere else.** Where one of
+those paths is a symlink, Axiom follows it only while it stays inside the
+project — `CLAUDE.md` pointing at `docs/instructions.md` is read, and Claude
+Code reads it too. A link that leads out of the project is not followed and not
+opened, so a repository you cloned cannot point `CLAUDE.md` at your SSH key and
+have Axiom hash it. Such a path is reported as `link not followed`, and where it
+led is recorded nowhere; see [Privacy](#privacy).
+
+Two sessions whose observed components match are **not** established to have run
+under the same harness, identical prompts, an identical model, identical
+context, an identical repository state, or identical behavior. Components that
+differ do **not** establish that a configuration change caused a difference in
+how the work went. This is provenance, not causality.
+
+The states are kept apart, because they answer different questions:
+
+| State | Meaning |
+| --- | --- |
+| `observed` | Axiom read it, and the digest identifies its exact bytes |
+| `nothing found there` | nothing was at that path at that moment |
+| `not established` | something was there and Axiom did not read it |
+| `link not followed` | the path is a symlink Axiom did not read through |
+
+Because the observation is taken while the session starts, editing `CLAUDE.md`
+tomorrow does not change what a capture recorded today, and a profile never
+reads these files: a log recorded before Axiom observed any of this reports
+that no harness provenance was recorded, which is not a claim that the agent
+ran with no configuration.
+
 ### Recorded turns
 
 A **turn** is the execution context an agent labels with an identifier of its
@@ -1251,15 +1314,58 @@ Axiom is local-first and metadata-first. Nothing is sent anywhere, and Axiom
 makes no network calls at all.
 
 **Never recorded:** file contents, the text of edits, tool output, agent error
-text, prompts, shell command text, or search patterns.
+text, prompts, shell command text, search patterns, or the contents of any
+configuration file.
 
 **Recorded instead:** for a shell command or a search pattern, a SHA-256 digest.
 A digest is enough to notice that the same command ran five times without
 storing what the command was. Digests are domain-separated, so a shell command
 and a search pattern with identical text never look equivalent.
 
-**Recorded in clear text:** file paths and the working directory. This is a
-deliberate trade-off. A finding is only actionable if it can say
+**Read to be digested, and kept nowhere:** the configuration files behind
+harness provenance. At each session start Axiom reads `CLAUDE.md`,
+`.claude/settings.json`, `.claude/settings.local.json` and the definitions
+directly inside `.claude/agents`, hashes each one's exact bytes, and drops what
+it read. A settings file full of environment variables and an instruction file
+full of internal detail leave nothing behind but a digest. No error from reading
+one of these files is ever printed, because an error can quote the file.
+
+Those paths are the only ones Axiom asks the filesystem for. It looks for
+nothing else: no directory is searched for candidates, `.claude/agents` is
+enumerated one level deep, and your home directory is never searched. Working
+out which directory is the project root asks whether a `.git` entry exists in
+the directories above your working directory, and opens none of them.
+
+**Reading those paths cannot be redirected elsewhere.** A repository is not
+something you have read before you open it in an agent, and any of those paths
+could be a symlink placed there by whoever wrote it. So Axiom resolves all four
+inside the project directory itself, using `os.Root`, which refuses a path that
+leaves it. A link is followed while it stays in the project, and a link out of
+it — absolute, climbing with `..`, going through another link, or a
+`.claude/agents` that is itself a link to somewhere else — is not followed and
+not opened. The guarantee, stated as precisely as it is enforced: **no entry a
+`git` checkout can create will make harness provenance read a file outside the
+project directory.** Cloning an untrusted repository and starting a session in
+it does not put your keys, your credentials or anything else in your home
+directory within reach of this. A refused path is reported as
+`link not followed`, and where the link led is neither hashed, recorded nor
+printed.
+
+That wording is careful for one reason: a **hard link** inside the project to a
+file elsewhere on the same filesystem is indistinguishable from the file, so no
+path-based boundary can see it. A checkout cannot create one — `git` stores only
+files, directories and symlinks — so this is not something a clone carries, but
+an archive extracted with enough privilege could.
+
+The cost is that a link kept inside the project pointing at something *you* put
+outside it stops working for the same reason it stops working for an attacker.
+Keeping `CLAUDE.md` in a dotfiles repository and linking it in is a real
+arrangement, and Axiom reports it as a link it did not follow rather than
+reading it.
+
+**Recorded in clear text:** file paths, the working directory, and the filename
+of each subagent definition observed in `.claude/agents` (the other provenance
+paths are fixed constants). This is a deliberate trade-off. A finding is only actionable if it can say
 `internal/acm/manager.go read 6 times` rather than naming a hash, and the data
 never leaves your machine. Be aware that paths can carry project, client, or
 customer names. A future strict mode will be able to redact them: every path in
@@ -1335,6 +1441,13 @@ read:
   boundary the log recorded. An epoch also ends where a session ends, which
   discards nothing, and a reset the agent never reported leaves no boundary at
   all — so boundaries, like tool call counts, are a lower bound.
+- **The agent's configuration is mostly invisible.** Claude Code tells a hook
+  nothing about how it was configured or which version it is, so harness
+  provenance is only what Axiom went and looked at: a short list of
+  project-local paths. User, enterprise and command-line configuration, files
+  reached through an import, plugins, skills, MCP servers and the permission
+  mode are not observable, and matching provenance is never evidence that two
+  sessions ran under the same harness.
 - **Durations exclude waiting on you.** Claude Code reports tool execution time,
   not the time spent in permission prompts.
 - **Recorded order only approximates execution order.** Hooks run as parallel

@@ -88,6 +88,56 @@ func TestOptionalFieldsAreOmitted(t *testing.T) {
 	}
 }
 
+// Provenance is an optional addition to a schema that keeps its version. A
+// record written before it existed still decodes, and it says no provenance
+// was recorded rather than an empty harness.
+func TestHarnessProvenanceIsOptional(t *testing.T) {
+	t.Parallel()
+
+	const historical = `{"schema_version":1,"agent":"claude-code","type":"session_start",` +
+		`"timestamp":"2026-08-10T19:41:02Z","session_id":"session-1",` +
+		`"session":{"source":"startup"}}`
+
+	var back event.Event
+	if err := json.Unmarshal([]byte(historical), &back); err != nil {
+		t.Fatalf("a record written before provenance existed no longer decodes: %v", err)
+	}
+	if back.Version() != event.SchemaVersion {
+		t.Errorf("version = %d, want the unchanged %d", back.Version(), event.SchemaVersion)
+	}
+	if back.Session == nil || back.Session.Harness != nil {
+		t.Errorf("session = %+v, want no provenance at all", back.Session)
+	}
+
+	// And a start that observed nothing eligible still records what it
+	// looked at, so absence of provenance keeps meaning "not observed".
+	observed := event.Event{
+		SchemaVersion: event.SchemaVersion,
+		Agent:         "claude-code",
+		Type:          event.TypeSessionStart,
+		Timestamp:     time.Date(2026, 8, 10, 19, 41, 2, 0, time.UTC),
+		SessionID:     "session-1",
+		Session: &event.Session{Source: "startup", Harness: &event.Harness{
+			Components: []event.HarnessComponent{{
+				Kind:   event.HarnessProjectInstructions,
+				Path:   "CLAUDE.md",
+				Status: event.HarnessAbsent,
+			}},
+		}},
+	}
+	got, err := json.Marshal(observed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	const want = `{"schema_version":1,"agent":"claude-code","type":"session_start",` +
+		`"timestamp":"2026-08-10T19:41:02Z","session_id":"session-1",` +
+		`"session":{"source":"startup","harness":{"components":[` +
+		`{"kind":"project_instructions","path":"CLAUDE.md","status":"absent"}]}}}`
+	if string(got) != want {
+		t.Fatalf("unexpected encoding\n got: %s\nwant: %s", got, want)
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	t.Parallel()
 
