@@ -101,12 +101,13 @@ jobs:
       # workflow's GITHUB_TOKEN is deliberately not exported to this step: the
       # Copilot credential is used for inference and nothing else.
       #
-      # Model: gpt-5.3-codex is pinned on purpose. actions/ai-inference@v3
-      # supports explicit selection; its default is gpt-4.1, which GitHub
-      # retired from Copilot on 2026-06-01. Copilot CLI documents
-      # gpt-5.3-codex as the code-focused model, and GitHub's plan table lists
-      # it on Pro, Pro+, Max, Business, and Enterprise. copilot-allow-tools is
-      # left unset, so the CLI is given no shell, write, read, or URL tools.
+      # Model: selection is left to Copilot CLI. This repository is owned by a
+      # Copilot Free account, which can use the CLI but cannot ask for a
+      # specific model such as gpt-5.3-codex. The model input is set to the
+      # empty string rather than omitted: actions/ai-inference@v3 defaults it
+      # to gpt-4.1, and only an empty value makes the action leave --model off
+      # the CLI invocation. copilot-allow-tools is left unset, so the CLI is
+      # given no shell, write, read, or URL tools.
       - name: Generate a draft description
         id: infer
         if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && env.HAS_COPILOT_TOKEN == 'true'
@@ -115,7 +116,7 @@ jobs:
         with:
           system-prompt-file: .github/pr-description/system-prompt.txt
           prompt-file: ${{ runner.temp }}/user-prompt.txt
-          model: gpt-5.3-codex
+          model: ""
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
 
