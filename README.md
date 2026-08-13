@@ -26,10 +26,17 @@ agent was doing while it ran one up.
 Axiom reconstructs the execution instead. From hook events and the agent's own
 telemetry it derives structure nothing in the raw stream states — the context
 epochs a session was cut into, the turns that recorded work, the nested agents
-a turn launched and the calls those agents went on to make — and then reports
-observations against that structure: the same file read on both sides of a
-context reset, one file read in two agent scopes a launch relates, a command
-that failed three times, the calls recorded before it later succeeded.
+a turn launched and the calls those agents went on to make — and it records the
+agent configuration that was in place when the session started. That
+reconstruction is the reason to run it: a transcript holds the calls, and the
+structure around them is what you would otherwise rebuild by hand.
+
+Against that structure it reports the narrower observations the record
+supports: the same file read on both sides of a context reset, one file read
+in two agent scopes a launch relates, a command that failed three times, the
+calls recorded before it later succeeded. Each of those needs its exact pattern
+to have been recorded, so a session that produces none of them is a normal
+outcome rather than an empty report.
 
 Every line is bounded by the record. Where the log does not establish something,
 Axiom says so rather than estimating it, and it never calls observed work
@@ -464,8 +471,11 @@ was, what belonged to each turn inside it, what work was observed and where it
 happened, and which of that work Axiom is prepared to judge. The captions each
 section prints, and three of the five turns, are left out of this example.
 
-A quiet findings section is a real result. Axiom would rather miss redundant work
-than invent it, so it only reports repetition it can justify:
+A quiet findings section is the ordinary result. A finding needs one exact
+identity to repeat — the same path, or the same command text — with nothing in
+between that could have changed the answer, and an agent that varies a command
+between runs leaves nothing for the predicate to match. Axiom would rather miss
+repetition than invent it, so it reports only what it can justify:
 
 ```console
   Repeated shell operation                   session 7b4d3ab1
@@ -482,8 +492,8 @@ A **context epoch** is the work recorded for one session identity between the
 points where the agent reported starting a context. Those starts are the only
 boundaries Axiom infers anything from, and they are the same ones the findings
 below are scoped by: repetition is never compared across a reset. Reading the
-epochs first is what tells you whether a quiet findings section describes a clean
-run or a run whose evidence was cut into pieces by resets.
+epochs first is what tells you how many separate contexts the work below was
+spread across, and so how much of the run any one span of it could cover.
 
 Membership follows the order records were appended, never their timestamps. Hooks
 run as parallel processes, so recorded times can arrive out of order; the one time

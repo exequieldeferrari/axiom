@@ -139,15 +139,21 @@ const (
 	// The scope is filled in by consumptionScope, and the break keeps the
 	// longest of them inside the report's width.
 	associationCaveat = "This is the observed model consumption\nfor %s, not the cost of the repetition.\n"
-	// The scope is stated as the session and the reset rather than as the
-	// epoch, because the two are not the same in every log: the profiler ends
-	// its runs at recorded starts, and an epoch above may also have been
+	// The predicate is stated before the boundaries, because a boundary is
+	// not the usual reason this section is empty: a finding needs one exact
+	// identity to repeat, and work that repeats under a different spelling
+	// never forms a run for a boundary to end. Naming the scope alone invited
+	// the reader to conclude that the reading had merely been cut up.
+	//
+	// The scope, where it is named, is the session and the reset rather than
+	// the epoch, because the two are not the same in every log: the profiler
+	// ends its runs at recorded starts, and an epoch above may also have been
 	// closed by a session end, which ends no run.
-	scopeExplanation  = "Analysis is scoped to a single session and subagent, and every recorded\ncontext reset ends it: work repeated after a reset, or in a later session,\nis not counted, because the agent's context may legitimately have been lost\nin between.\n"
-	observedCaveat    = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
-	measuredCaveat    = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
-	failureCaveat     = "A repeated failed attempt is one shell command tried again after it failed,\nwithin a single turn, with nothing in between that Axiom can see changing\nstate. Failure reporting says what each attempt's failure report carried\nbeyond a recognized exit status, and Reports says whether those reports came\nout the same. They are two observations about text the agent wrote, and\nneither ranks the other: reports often differ over an elapsed time or an\noutput path alone, and reports match most easily when there was nothing in\nthem to differ. Neither says why the attempts failed, and an exit status is\nread out of that same text. Where a later attempt was observed succeeding it\nis reported as that and nothing more: what came between is not evidence of\nwhat made the difference.\n"
-	noFindingsMessage = "  No redundant work or repeated failed attempts detected.\n"
+	noFindingsExplanation = "A finding is one exact identity repeating — the same path read whole, or the\nsame command text — inside one session and subagent, with nothing in between\nthat could have changed the answer. Nothing recorded matched that, which does\nnot establish that nothing repeated: repetition under a different spelling,\nacross a context reset, or inside an operation Axiom cannot interpret is not\ncounted at all.\n"
+	observedCaveat        = "Repeated-call tool time is how long the repeated calls took to execute, not\ncounting the first. It is not the total time of the operation, and it\nmeasures nothing about context, tokens, or cost. Axiom reports what it\nobserved; a file may still have been changed by something outside the agent.\n"
+	measuredCaveat        = "Redundant tool output is the size of the results the repeated calls returned,\nas the agent itself measured them. It is a count of bytes, not tokens and not\ncost, and it appears only where every repeated call was measured.\n"
+	failureCaveat         = "A repeated failed attempt is one shell command tried again after it failed,\nwithin a single turn, with nothing in between that Axiom can see changing\nstate. Failure reporting says what each attempt's failure report carried\nbeyond a recognized exit status, and Reports says whether those reports came\nout the same. They are two observations about text the agent wrote, and\nneither ranks the other: reports often differ over an elapsed time or an\noutput path alone, and reports match most easily when there was nothing in\nthem to differ. Neither says why the attempts failed, and an exit status is\nread out of that same text. Where a later attempt was observed succeeding it\nis reported as that and nothing more: what came between is not evidence of\nwhat made the difference.\n"
+	noFindingsMessage     = "  No redundant work or repeated failed attempts detected.\n"
 )
 
 // reportInput is everything one report is written from.
@@ -228,7 +234,7 @@ func writeReport(w io.Writer, in reportInput) {
 	fmt.Fprint(w, "\nFindings\n\n")
 	if len(findings) == 0 {
 		fmt.Fprint(w, noFindingsMessage)
-		fmt.Fprint(w, "\n"+scopeExplanation)
+		fmt.Fprint(w, "\n"+noFindingsExplanation)
 		return
 	}
 
