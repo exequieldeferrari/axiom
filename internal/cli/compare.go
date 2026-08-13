@@ -60,7 +60,10 @@ const (
 	compareHarnessLimits = "A component Axiom did not establish is reported as that and never as a change\nin a project: a path it could not read, and a link it did not read through,\nare limits of the observation. A component observed in one capture only is one\nthe other capture's observation established was not there, and it is said of\nthe two sides rather than of two moments in time, because nothing establishes\nan order between two captures.\n"
 	comparePaths         = "Paths are never compared between captures. Each capture records its own\nabsolute paths, so how many paths a relation held is compared and the paths\nthemselves are not. The same goes for a command, which is recorded only as a\ndigest of one exact string.\n"
 	compareUsage         = "Consumption is not compared. Whether a usage log exists is a fact about the\ndirectory, and an absent one is consumption that was never recorded rather\nthan consumption of none.\n"
-	compareFindings      = "Findings are not compared. What the profiler compares repetition within ends\nat every recorded context reset and at every agent scope, so the same repeated\nwork counts differently depending on where those boundaries fell.\n"
+	// The sentence has to survive a reader who has one capture with a
+	// finding and one without, which is the reading the evidence does not
+	// support and the one the report would otherwise invite.
+	compareFindings = "Findings are not compared. A finding describes one uninterrupted sequence of\nrepeated calls, and such a sequence ends at every recorded context reset, at\nevery agent scope, and for a failed attempt at every turn boundary, so the\nsame recorded calls form one finding, a shorter one, or none at all, according\nto where those boundaries fell. A finding held by one capture and not the\nother therefore establishes no difference in behavior, and no finding is an\nestablished zero: a call rejected before it ran was never recorded.\n"
 )
 
 // captureOptions selects one side of a comparison.
