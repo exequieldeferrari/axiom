@@ -32,6 +32,16 @@
 //
 // Consecutive starts whose observed components were identical are reported
 // together, which says that the observations matched and nothing further.
+//
+// # Comparing two observations
+//
+// Two observations can be compared component by component, and only that way.
+// There is no composite value over the components and no count of how many of
+// them differed, because one number over a set of unlike paths is the single
+// harness identity ADR 0018 refused. What a comparison establishes is bounded
+// by the same wording as an observation: matching components held the same
+// bytes at two recorded moments, and nothing follows from that about either
+// agent, either harness, or either capture's behavior.
 package harness
 
 import (
