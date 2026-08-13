@@ -1,0 +1,149 @@
+name: PR description
+
+# Best-effort draft of a pull request body from the diff. It is not CI, it is
+# not evidence, and it must not become a required check. A failure here leaves
+# the template in place and still reports success.
+
+on:
+  pull_request:
+    types: [opened]
+
+# These permissions belong to GITHUB_TOKEN, which reads the pull request and
+# writes its description. It is not the Copilot credential and never reaches
+# the model step. copilot-requests: write is deliberately absent: it is the
+# organization-billed path, this repository is personally owned, and GitHub's
+# agentic-workflow documentation states that setting it causes
+# COPILOT_GITHUB_TOKEN to be ignored for inference.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  describe:
+    name: describe
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      # Secrets are not available to fork pull requests, and a missing secret
+      # is a skip rather than a failure.
+      HAS_COPILOT_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN != '' }}
+
+    steps:
+      # The workflow file on pull_request comes from the merge commit. The
+      # tool, template, and prompts must not: they are policy. Check out the
+      # base SHA only, and never the pull request head.
+      - name: Checkout the base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+
+      - name: Build the description tool
+        run: go build -o "$RUNNER_TEMP/prdesc" ./tools/prdesc
+
+      # Title, body, and diff are written to files. They are not interpolated
+      # into this script. PR_NUMBER is an integer from the event payload.
+      - name: Fetch the pull request as data
+        id: fetch
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.title // ""' > "$RUNNER_TEMP/pr-title.txt"
+          gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' > "$RUNNER_TEMP/pr-body.md"
+          gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" -H "Accept: application/vnd.github.diff" > "$RUNNER_TEMP/pr.diff"
+
+      - name: Skip if the body is not template-blank
+        id: eligible
+        if: steps.fetch.outcome == 'success'
+        run: |
+          if "$RUNNER_TEMP/prdesc" eligible \
+            --template .github/pull_request_template.md \
+            --body "$RUNNER_TEMP/pr-body.md"; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Leaving the existing pull request body in place."
+          fi
+
+      - name: Prepare the untrusted prompt
+        if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && env.HAS_COPILOT_TOKEN == 'true'
+        run: |
+          "$RUNNER_TEMP/prdesc" prepare \
+            --task .github/pr-description/task-prompt.txt \
+            --title "$RUNNER_TEMP/pr-title.txt" \
+            --diff "$RUNNER_TEMP/pr.diff" \
+            --out "$RUNNER_TEMP/user-prompt.txt"
+
+      - name: Set up Node
+        if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && env.HAS_COPILOT_TOKEN == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Copilot CLI
+        if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && env.HAS_COPILOT_TOKEN == 'true'
+        run: npm install -g @github/copilot
+
+      # Authentication: this repository is personally owned, so Copilot CLI is
+      # authenticated with a user-owned fine-grained PAT carrying only the
+      # "Copilot Requests" account permission. GitHub documents the CLI's
+      # precedence as COPILOT_GITHUB_TOKEN, then GH_TOKEN, then GITHUB_TOKEN;
+      # only the first is set here, so nothing else can be picked up. The
+      # workflow's GITHUB_TOKEN is deliberately not exported to this step: the
+      # Copilot credential is used for inference and nothing else.
+      #
+      # Model: gpt-5.3-codex is pinned on purpose. actions/ai-inference@v3
+      # supports explicit selection; its default is gpt-4.1, which GitHub
+      # retired from Copilot on 2026-06-01. Copilot CLI documents
+      # gpt-5.3-codex as the code-focused model, and GitHub's plan table lists
+      # it on Pro, Pro+, Max, Business, and Enterprise. copilot-allow-tools is
+      # left unset, so the CLI is given no shell, write, read, or URL tools.
+      - name: Generate a draft description
+        id: infer
+        if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && env.HAS_COPILOT_TOKEN == 'true'
+        continue-on-error: true
+        uses: actions/ai-inference@v3
+        with:
+          system-prompt-file: .github/pr-description/system-prompt.txt
+          prompt-file: ${{ runner.temp }}/user-prompt.txt
+          model: gpt-5.3-codex
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+      - name: Sanitize and update the pull request
+        if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && steps.infer.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RESPONSE_FILE: ${{ steps.infer.outputs.response-file }}
+        run: |
+          if [ ! -f "$RESPONSE_FILE" ]; then
+            echo "No model response file; leaving the template in place."
+            exit 0
+          fi
+          if ! "$RUNNER_TEMP/prdesc" sanitize \
+            --template .github/pull_request_template.md \
+            --in "$RESPONSE_FILE" \
+            --out "$RUNNER_TEMP/new-body.md"; then
+            echo "Model output was not a usable description; leaving the template in place."
+            exit 0
+          fi
+          gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' > "$RUNNER_TEMP/pr-body-now.md"
+          if ! "$RUNNER_TEMP/prdesc" eligible \
+            --template .github/pull_request_template.md \
+            --body "$RUNNER_TEMP/pr-body-now.md"; then
+            echo "The body changed while generation ran; not overwriting."
+            exit 0
+          fi
+          "$RUNNER_TEMP/prdesc" json-body --in "$RUNNER_TEMP/new-body.md" \
+            | gh api --method PATCH "repos/${GH_REPO}/pulls/${PR_NUMBER}" --input -
