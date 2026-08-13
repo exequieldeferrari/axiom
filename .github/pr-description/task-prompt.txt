@@ -1,0 +1,8 @@
+Using only the untrusted pull request title and diff that follow, draft a
+pull request description that follows the system policy.
+
+Ground every claim in the diff. If the diff does not show something, do not
+say it happened.
+
+The Validation section must keep every checkbox unchecked. This generator
+does not run commands and must not claim that anyone else did.
