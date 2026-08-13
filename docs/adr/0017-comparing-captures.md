@@ -1,6 +1,6 @@
 # 17. Comparing captures
 
-- Status: accepted
+- Status: accepted, with the findings deferral resolved by ADR 0020
 - Date: 2026-08-12
 
 ## Context
@@ -231,7 +231,11 @@ it is boundary-dependent: the same three repeated reads yield one finding of
 three occurrences, or two of two, depending on where a context reset fell and
 which agent scope made them. A count that changes with the boundaries is not
 something to subtract. This is a deferral, not a refusal: it needs captures that
-exercise it on both sides.
+exercise it on both sides. *(Resolved by ADR 0020. Those captures were built,
+and they established that the boundary dependence noted here is what a finding
+is rather than a gap in the evidence, so the deferral became a refusal. The
+paragraph is left in place because what it deferred is why the investigation
+happened.)*
 
 ### Paths and command digests are not compared
 
@@ -288,4 +292,7 @@ is an honest zero and not a defect.
 
 A future ADR may add findings to the comparison once captures exist that
 exercise them on both sides. Nothing in this design forecloses it, and nothing
-in it depends on the four blocks staying four.
+in it depends on the four blocks staying four. *(ADR 0020 is that ADR, and it
+declined to add them: the captures were built and they falsified the
+comparison. The second sentence still holds — the design did not foreclose it,
+the evidence did.)*
