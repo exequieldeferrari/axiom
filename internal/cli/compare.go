@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/exequieldeferrari/axiom/internal/analysis"
+	"github.com/exequieldeferrari/axiom/internal/event"
+	"github.com/exequieldeferrari/axiom/internal/harness"
 	"github.com/exequieldeferrari/axiom/internal/timeline"
 	"github.com/exequieldeferrari/axiom/internal/work"
 )
@@ -25,6 +27,16 @@ const (
 	// narrowed to match so the numbers stay in the same column.
 	compareSubIndent = "    "
 	compareSubWidth  = compareLabelWidth - len(compareSubIndent)
+
+	// An observed component is stated as a path and what the two
+	// observations established about it, which is prose rather than a
+	// number and so is not a column of the table above. A definition sits
+	// under the directory it was enumerated in, with its label narrowed by
+	// the extra indent so that every state stays in one column.
+	changeIndent           = "    "
+	changeWidth            = 32
+	definitionChangeIndent = changeIndent + "  "
+	definitionChangeWidth  = changeWidth - 2
 )
 
 const (
@@ -35,9 +47,20 @@ const (
 	// Said where it cannot be missed, because the two categories that move
 	// most are the two a reader is most likely to read as a result.
 	compareTrajectory = "The categories above are every recorded call in each capture, so shell and\nuninterpreted calls are shown with the rest: leaving either out would make\nthe remaining categories look like the whole of the work. Both were observed\ndiffering between repeated recordings of one workload, and so was the count\nof recorded tool calls they sum into.\n"
-	comparePaths      = "Paths are never compared between captures. Each capture records its own\nabsolute paths, so how many paths a relation held is compared and the paths\nthemselves are not. The same goes for a command, which is recorded only as a\ndigest of one exact string.\n"
-	compareUsage      = "Consumption is not compared. Whether a usage log exists is a fact about the\ndirectory, and an absent one is consumption that was never recorded rather\nthan consumption of none.\n"
-	compareFindings   = "Findings are not compared. What the profiler compares repetition within ends\nat every recorded context reset and at every agent scope, so the same repeated\nwork counts differently depending on where those boundaries fell.\n"
+	// Said immediately under the provenance block rather than only at the
+	// foot of the report. Everything after it is behavior, and a caveat
+	// that arrives after the reader has met the behavior is a caveat for
+	// readers who already agree.
+	harnessBoundary = "Provenance describes what Axiom observed for itself at each capture's recorded\nsession start. Nothing compared below is attributed to anything here.\n"
+	// The one sentence that has to survive an empty section. A block a
+	// reader skims past must not leave the impression that the two captures
+	// were established to match.
+	harnessUncompared    = "Components are not compared: %s. Whether the two captures observed the same\ncomponents is not established, which is not a statement that they differed.\n"
+	compareHarness       = "Harness provenance is what Axiom looked at for itself when a session start was\nrecorded, at the project root it resolved from that session's working\ndirectory. Components reported as the same bytes held the same bytes at the\ntwo recorded moments. That is not evidence that either agent loaded them, that\nthe two captures ran under one harness, or anything at all about how either\none behaved. Axiom records no project identity, so matching components do not\nestablish that the two captures are recordings of one project.\n"
+	compareHarnessLimits = "A component Axiom did not establish is reported as that and never as a change\nin a project: a path it could not read, and a link it did not read through,\nare limits of the observation. A component observed in one capture only is one\nthe other capture's observation established was not there, and it is said of\nthe two sides rather than of two moments in time, because nothing establishes\nan order between two captures.\n"
+	comparePaths         = "Paths are never compared between captures. Each capture records its own\nabsolute paths, so how many paths a relation held is compared and the paths\nthemselves are not. The same goes for a command, which is recorded only as a\ndigest of one exact string.\n"
+	compareUsage         = "Consumption is not compared. Whether a usage log exists is a fact about the\ndirectory, and an absent one is consumption that was never recorded rather\nthan consumption of none.\n"
+	compareFindings      = "Findings are not compared. What the profiler compares repetition within ends\nat every recorded context reset and at every agent scope, so the same repeated\nwork counts differently depending on where those boundaries fell.\n"
 )
 
 // captureOptions selects one side of a comparison.
@@ -119,6 +142,17 @@ type capture struct {
 	log     analysis.Log
 }
 
+// provenance is what the capture's session recorded of the agent's
+// project-local configuration.
+//
+// It is read out of the records the analysis already carried, by the identity
+// the capture was resolved to, and it never looks at a file: the observation
+// happened when that session started, and taking it again now would describe
+// this machine today.
+func (c capture) provenance() (harness.Session, bool) {
+	return c.log.Harness.Session(c.session)
+}
+
 func compareCaptures(opts compareOptions, stdout io.Writer) error {
 	baseline, err := resolve("baseline", opts.baseline)
 	if err != nil {
@@ -193,6 +227,10 @@ func writeComparison(w io.Writer, baseline, candidate capture) {
 	fmt.Fprint(w, "Axiom Compare\n─────────────\n")
 
 	writeCaptureShape(w, baseline, candidate)
+	// Placed here because it describes the conditions each capture was
+	// recorded under, and a reader has to meet those before meeting
+	// anything derived from the work itself.
+	writeHarnessComparison(w, baseline, candidate)
 	writeCompositionComparison(w, baseline, candidate)
 	writeDelegationComparison(w, baseline, candidate)
 	writeCrossReadComparison(w, baseline, candidate)
@@ -202,9 +240,202 @@ func writeComparison(w io.Writer, baseline, candidate capture) {
 	sentence(w, compareContract)
 	sentence(w, compareMechanic)
 	sentence(w, compareTrajectory)
+	sentence(w, compareHarness)
+	sentence(w, compareHarnessLimits)
 	sentence(w, comparePaths)
 	sentence(w, compareUsage)
 	sentence(w, compareFindings)
+}
+
+// writeHarnessComparison reports what Axiom observed of each capture's
+// project-local configuration, and compares the two observations.
+//
+// Nothing here reads a file. Every value was written into a log by the hook
+// that observed it, which is the only way a comparison of two captures
+// recorded weeks apart can still describe the two moments they were recorded
+// at rather than this machine today.
+//
+// The section is always written. A comparison that quietly omitted it where
+// there was nothing to compare would leave a reader to assume the two captures
+// matched, which is the one reading the evidence cannot support.
+func writeHarnessComparison(w io.Writer, baseline, candidate capture) {
+	fmt.Fprint(w, "\nObserved harness provenance\n\n")
+
+	b, bRecorded := baseline.provenance()
+	c, cRecorded := candidate.provenance()
+	writeProvenanceSide(w, baseline.side, b, bRecorded)
+	writeProvenanceSide(w, candidate.side, c, cRecorded)
+
+	// Each side needs one observation to compare, which is what a capture
+	// recorded under unchanging files has however many times it started.
+	// Where either side has none, the reason is stated and no component is
+	// compared, rather than one observation being chosen to stand for a
+	// capture recorded under two.
+	observed, observedOK := b.Comparable()
+	against, againstOK := c.Comparable()
+	if !observedOK || !againstOK {
+		sentence(w, fmt.Sprintf(harnessUncompared, uncomparable(
+			provenanceSide{baseline.side, b, bRecorded},
+			provenanceSide{candidate.side, c, cRecorded})))
+		sentence(w, harnessBoundary)
+		return
+	}
+
+	fmt.Fprintln(w)
+	writeComponentChanges(w, harness.Compare(observed, against))
+	sentence(w, harnessBoundary)
+}
+
+// writeProvenanceSide says what one capture recorded, before anything is
+// compared.
+//
+// The four states are held apart for the reason ADR 0018 holds the component
+// states apart: a capture whose log predates provenance, one whose project
+// Axiom could not resolve, and one that started twice under changing files are
+// three different observations, and every one of them is a reason there is
+// nothing to compare rather than evidence that nothing was configured.
+func writeProvenanceSide(w io.Writer, name string, s harness.Session, recorded bool) {
+	fmt.Fprintf(w, "  %-10s %s\n", name, provenanceState(s, recorded))
+
+	// A start that recorded nothing is reported rather than dropped: its
+	// silence is the reason the observation above does not cover the
+	// capture. Where there is no observation the line above has already
+	// accounted for every start, and saying it twice would read as two
+	// separate gaps.
+	if len(s.Observations) > 0 && s.StartsWithoutProvenance > 0 {
+		fmt.Fprintf(w, "  %-10s %s recorded no harness provenance\n", "",
+			plural(s.StartsWithoutProvenance, "session start"))
+	}
+}
+
+func provenanceState(s harness.Session, recorded bool) string {
+	switch {
+	case !recorded:
+		return "no session start was recorded"
+	case len(s.Observations) == 0:
+		return fmt.Sprintf("no harness provenance recorded at %s",
+			plural(s.Starts, "recorded session start"))
+	case len(s.Observations) == 1:
+		return "observed at " + observedAt(s.Observations[0].Starts)
+	default:
+		return fmt.Sprintf("%s recorded", plural(len(s.Observations), "distinct observation"))
+	}
+}
+
+// side is one capture's recorded provenance, under the name the report calls
+// that capture by.
+type provenanceSide struct {
+	name     string
+	session  harness.Session
+	recorded bool
+}
+
+// uncomparable says why two observations were not compared, naming every side
+// that has no single observation to compare by.
+//
+// Two sides limited in the same way are reported once. Naming both would read
+// as two separate problems where there is one, and the sentence is the only
+// place a reader is told why the components below are missing.
+func uncomparable(baseline, candidate provenanceSide) string {
+	b, c := baseline.limit(), candidate.limit()
+	switch {
+	case b.named != "" && b.named == c.named:
+		return "neither capture " + b.shared
+	case b.named != "" && c.named != "":
+		return "the " + baseline.name + " " + b.named +
+			", and the " + candidate.name + " " + c.named
+	case b.named != "":
+		return "the " + baseline.name + " " + b.named
+	default:
+		return "the " + candidate.name + " " + c.named
+	}
+}
+
+// limit is why a capture has no single observation to compare by.
+//
+// It carries two forms of one fact. named completes "the baseline …", and
+// shared completes "neither capture …", which has to be the positive form
+// because "neither" already carries the negation.
+type provenanceLimit struct {
+	named  string
+	shared string
+}
+
+// limit says why a capture has no single observation to compare by, and is
+// zero where it has one.
+//
+// The three cases are held apart because they are three different silences: a
+// capture whose records begin after its session did, one whose Axiom recorded
+// no provenance or could resolve no project, and one observed under two
+// different sets of components. None of them is a capture that ran with no
+// configuration.
+func (s provenanceSide) limit() provenanceLimit {
+	switch {
+	case !s.recorded:
+		return provenanceLimit{"recorded no session start", "recorded a session start"}
+	case len(s.session.Observations) == 0:
+		return provenanceLimit{"recorded no harness provenance", "recorded harness provenance"}
+	case len(s.session.Observations) > 1:
+		return provenanceLimit{
+			named: "recorded more than one distinct observation, and Axiom does not " +
+				"choose one of them to stand for a capture",
+			shared: "recorded a single observation, and Axiom does not choose one of " +
+				"several to stand for a capture",
+		}
+	default:
+		return provenanceLimit{}
+	}
+}
+
+// writeComponentChanges states what the two observations established about
+// each observed path.
+func writeComponentChanges(w io.Writer, changes []harness.Change) {
+	definitions := 0
+	for _, ch := range changes {
+		if ch.Kind == event.HarnessSubagentDefinition {
+			definitions++
+		}
+	}
+	for _, ch := range changes {
+		indent, width, label := changeIndent, changeWidth, ch.Path
+		if ch.Kind == event.HarnessSubagentDefinition {
+			indent, width = definitionChangeIndent, definitionChangeWidth
+			label = definitionName(ch.Path)
+		}
+		fmt.Fprintf(w, "%s%-*s%s\n", indent, width, label, changeState(ch, definitions))
+	}
+}
+
+// changeState says what two observations established about one component.
+//
+// Every state is stated in terms of the two observations. None of them is a
+// description of a project, and none of them ranks the two captures: a
+// component observed on one side alone is named by the side it was observed
+// on, because which capture is the baseline is the operator's choice and not
+// an order the records establish.
+func changeState(ch harness.Change, definitions int) string {
+	switch ch.Verdict {
+	case harness.VerdictSame:
+		return "same bytes"
+	case harness.VerdictDiffered:
+		return "different bytes"
+	case harness.VerdictAppeared:
+		return "observed in the candidate only"
+	case harness.VerdictDisappeared:
+		return "observed in the baseline only"
+	case harness.VerdictAbsent:
+		return "nothing found on either side"
+	case harness.VerdictEnumerated:
+		// A directory carries no digest, so what both sides established
+		// is that enumeration happened. An empty one says so rather than
+		// leaving a reader to read the absence of definitions below it.
+		if definitions == 0 {
+			return "enumerated on both sides, no definition found"
+		}
+		return "enumerated on both sides"
+	default:
+		return "not established"
+	}
 }
 
 // writeCaptureShape says what each side is, before anything is compared.

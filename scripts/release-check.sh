@@ -432,10 +432,27 @@ if "$axiom" compare "$baseline" "$candidate" >"$out/compare.txt" 2>&1; then
 		'^ +outcome not established +[0-9]'
 	# Telemetry presence is stated, and nothing measured is compared.
 	matches "states whether telemetry exists" "$out/compare.txt" '^  Usage log +[a-z]+ +[a-z]+$'
+	# The candidate is the baseline's records under another identity, so the
+	# provenance each side recorded is the same provenance and every
+	# component has to come out matching.
+	have "reports the harness each capture recorded" "$out/compare.txt" \
+		"Observed harness provenance" "observed at session start 1"
+	matches "compares provenance component by component" "$out/compare.txt" \
+		'^    CLAUDE\.md +same bytes'
+	have "states that provenance accounts for nothing below it" "$out/compare.txt" \
+		"is attributed to anything"
 	if grep -qEi 'token|cost|\$|efficien|waste|better|worse|improve|regress|%' "$out/compare.txt"; then
 		bad "the comparison carries consumption or a judgement"
 	else
 		ok "compares no consumption and passes no judgement"
+	fi
+	# The vocabulary that would turn a provenance difference into an account
+	# of a behavioral one. 'explains' is left out on purpose: the report uses
+	# it to deny that one capture explains another.
+	if grep -qEi 'correlat|associat|resulted in|responsible for|led to|due to|degrad|impact|effect' "$out/compare.txt"; then
+		bad "the comparison carries causal or statistical vocabulary"
+	else
+		ok "attributes no behavior to observed provenance"
 	fi
 else
 	bad "'axiom compare' failed: $(cat "$out/compare.txt")"

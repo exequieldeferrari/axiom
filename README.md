@@ -1183,6 +1183,46 @@ Capture shape
   Usage log                                        absent     absent
 ```
 
+Next, what Axiom observed of each capture's project-local configuration when
+its session started, compared one component at a time:
+
+```console
+Observed harness provenance
+
+  baseline   observed at session start 1
+  candidate  observed at session start 1
+
+    CLAUDE.md                       different bytes
+    .claude/settings.json           nothing found on either side
+    .claude/settings.local.json     same bytes
+    .claude/agents                  enumerated on both sides
+      explore.md                    same bytes
+      review.md                     observed in the candidate only
+
+Provenance describes what Axiom observed for itself at each capture's
+recorded session start. Nothing compared below is attributed to anything
+here.
+```
+
+This answers one question: were these two captures recorded under the same
+observable project-local state, as far as Axiom can establish? It is evidence
+about whether the comparison below it is worth reading, and it is never evidence
+that a difference here accounts for a difference there.
+
+Every value comes from the record the hook wrote at that session start, so a
+comparison says the same thing after the project has been rewritten or deleted.
+There is no combined harness value: components are compared one at a time,
+because a single number over a set of unlike paths would read as the harness
+identity Axiom cannot establish.
+
+A component Axiom did not establish — a path it could not read, or a link it did
+not read through — reports as `not established` and never as a change in the
+project. Where a capture recorded no provenance, or recorded more than one
+distinct observation — because its files changed between two of its starts, or
+because a start that recorded none sits between two that did — the components
+are not compared and the report says which capture and why. It never says the
+two matched.
+
 Then four blocks, each a signed count and nothing more:
 
 ```console
@@ -1227,6 +1267,13 @@ paths.
 - **No score, rate, ranking or verdict.** A difference is the candidate's count
   less the baseline's. Axiom never calls one capture better, worse, faster or
   more efficient, and never says a change caused anything.
+- **Nothing about what a configuration difference did.** Observed harness
+  provenance is compared, and no behavioral difference is ever attributed to it.
+  Matching components establish that those paths held the same bytes at the two
+  recorded moments — not that either agent loaded them, not that the two ran
+  under the same harness, and nothing about how either behaved. Axiom records
+  no project identity either, so matching components do not establish that the
+  two captures are recordings of one project.
 - **Nothing about consumption.** Tokens, model requests and cost are not
   compared. Whether a usage log exists is shown, because measurements exist only
   for the time `axiom observe` was running, and an absent log is consumption

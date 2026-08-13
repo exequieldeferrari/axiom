@@ -495,6 +495,11 @@ func TestCompareUsesNoJudgementVocabulary(t *testing.T) {
 		"efficien", "waste", "wasted", "saved", "saving",
 		"better", "worse", "improve", "regress", "optimal", "optimi",
 		"caused", "because of", "%", "$", "€", "£",
+		// The vocabulary a section about the conditions a capture was
+		// recorded under invites, and which would read as a claim that
+		// one of them accounts for a difference below it.
+		"correlat", "associat", "resulted in", "responsible for",
+		"led to", "due to", "degrad", "impact", "effect",
 	}
 	for _, text := range texts {
 		lower := strings.ToLower(text)
