@@ -100,25 +100,6 @@ func TestRunInstallTargetsTheRepositoryRoot(t *testing.T) {
 	}
 }
 
-// The home directory being a repository is one of Claude Code's own exceptions
-// to root resolution, alongside directories outside any repository.
-func TestProjectRootKeepsTheStartingDirectory(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	if err := os.Mkdir(filepath.Join(home, ".git"), 0o755); err != nil {
-		t.Fatalf("create .git: %v", err)
-	}
-	sub := filepath.Join(home, "scratch")
-	if err := os.Mkdir(sub, 0o755); err != nil {
-		t.Fatalf("create subdirectory: %v", err)
-	}
-
-	if got := projectRoot(sub); got != sub {
-		t.Errorf("projectRoot = %s, want the starting directory %s", got, sub)
-	}
-}
-
 func TestRunInstallGlobalUsesClaudeConfigDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)

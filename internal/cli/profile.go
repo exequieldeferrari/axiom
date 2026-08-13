@@ -15,6 +15,7 @@ import (
 	"github.com/exequieldeferrari/axiom/internal/correlate"
 	"github.com/exequieldeferrari/axiom/internal/crossread"
 	"github.com/exequieldeferrari/axiom/internal/delegation"
+	"github.com/exequieldeferrari/axiom/internal/harness"
 	"github.com/exequieldeferrari/axiom/internal/profiler"
 	"github.com/exequieldeferrari/axiom/internal/reacquire"
 	"github.com/exequieldeferrari/axiom/internal/store"
@@ -108,6 +109,7 @@ func profileLog(dir string, opts profileOptions, stdout io.Writer) error {
 		findings:     log.Findings,
 		activity:     log.Activity,
 		context:      log.Context,
+		harness:      log.Harness,
 		reacquire:    log.Reacquire,
 		measured:     log.Usage.Index.Measure(log.Findings.Findings),
 		turns:        measuredTurns,
@@ -155,6 +157,11 @@ type reportInput struct {
 	context   timeline.Report
 	reacquire reacquire.Report
 	measured  []correlate.Measured
+
+	// harness is what was observed of the agent's configuration when each
+	// session started. It is carried from the records that hold it and is
+	// never derived from the filesystem at report time.
+	harness harness.Report
 
 	// turns are the turns that recorded work, with what was observed under
 	// each. outside counts consumption observed under turn identities none of
@@ -212,6 +219,7 @@ func writeReport(w io.Writer, in reportInput) {
 	}
 
 	writeTimeline(w, in.context)
+	writeHarness(w, in.harness)
 	writeTurns(w, in.turns, in.outside, in.unattributed, in.delegation)
 	writeCrossRead(w, in.crossread)
 	writeReacquired(w, in.reacquire)

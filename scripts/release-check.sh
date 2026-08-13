@@ -194,6 +194,16 @@ turn="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 measured_call="toolu_000000000000000000000"
 handler="$project/internal/api/handler.go"
 readme="$project/README.md"
+# Project-local configuration for the session start below to observe. It is
+# written before the start is sent, because provenance describes what was there
+# at that moment and a file created afterwards is not part of it.
+printf '# project instructions\n' >"$project/CLAUDE.md"
+mkdir -p "$project/.claude/agents"
+printf 'explore the repository\n' >"$project/.claude/agents/explore.md"
+# And one eligible path pointed out of the project, which is what a hostile
+# repository would carry. The packaged binary has to refuse it.
+printf 'outside-the-project-secret\n' >"$work/secret.json"
+ln -s "$work/secret.json" "$project/.claude/settings.json"
 
 hook_noise=""
 hook_failed=0
@@ -358,6 +368,29 @@ if "$axiom" profile >"$out/profile.txt" 2>&1; then
 	matches "says whether the reports were the same" "$out/profile.txt" 'Reports +identical'
 	have "reports what the model consumed in those turns" "$out/profile.txt" \
 		"Observed model consumption" "Model requests"
+	# Provenance was observed by the packaged binary when the session start
+	# was recorded, and the report has to say what it is as well as what it
+	# is not.
+	have "reports the harness observed when the session started" "$out/profile.txt" \
+		"Observed harness provenance" "CLAUDE.md" "enumerated, 1 definition"
+	have "keeps provenance within the evidence" "$out/profile.txt" \
+		"It is not the configuration Claude Code loaded." \
+		"that two sessions ran under the same harness"
+	# A link out of the project is refused, and said to have been.
+	have "refuses an eligible path leading out of the project" "$out/profile.txt" \
+		"link not followed"
+	# Configuration contents are read to digest them and kept nowhere, and
+	# the file the link named was never read at all.
+	if grep -q "project instructions" "$AXIOM_DATA_DIR/events.jsonl"; then
+		bad "configuration content reached the event log"
+	else
+		ok "configuration content is not recorded"
+	fi
+	if grep -q "outside-the-project-secret\|$work/secret.json" "$AXIOM_DATA_DIR/events.jsonl"; then
+		bad "a file outside the project reached the event log"
+	else
+		ok "a path leading out of the project left nothing in the log"
+	fi
 	have "keeps the findings' language within the evidence" "$out/profile.txt" \
 		"2 findings" \
 		"with no agent modification observed in between" \

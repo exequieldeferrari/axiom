@@ -63,7 +63,129 @@ type Session struct {
 	Source string `json:"source,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Model  string `json:"model,omitempty"`
+
+	// Harness is what Axiom observed of the agent's project-local
+	// configuration at the moment this start was recorded. It is set on a
+	// session start and on nothing else.
+	//
+	// Absence means no provenance was recorded, which is what every record
+	// written before this field existed says, what a start Axiom could not
+	// resolve a project for says, and what a start recorded by an Axiom that
+	// did not observe any of this says. It never means that the agent ran
+	// with no configuration.
+	Harness *Harness `json:"harness,omitempty"`
 }
+
+// Harness is the observable configuration Axiom found for itself when a
+// session start was recorded.
+//
+// The claim is exactly this: at that moment, at the project root Axiom
+// resolved from the session's working directory, each named path was in the
+// state recorded beside it. Nothing here is the configuration the agent
+// loaded. An agent reads configuration Axiom does not look at, from scopes
+// Axiom cannot establish, and reaches further from the files it does read;
+// none of that is observable from a hook, so none of it is claimed.
+//
+// Two records whose components match establish that these paths held the same
+// bytes. They do not establish that two sessions ran under the same harness,
+// and neither matching nor differing components establish anything about how
+// either session behaved.
+type Harness struct {
+	// Components are the observations, one per eligible path, in a fixed
+	// order that does not depend on the filesystem.
+	//
+	// The set of paths is the set this Axiom looked at. A component that is
+	// not listed was not observed, which is a different fact from a
+	// component listed as absent: the first says Axiom never looked, the
+	// second says Axiom looked and found nothing there.
+	Components []HarnessComponent `json:"components"`
+}
+
+// HarnessComponent is one observed path.
+type HarnessComponent struct {
+	Kind HarnessKind `json:"kind"`
+
+	// Path is where the component was looked for, relative to the resolved
+	// project root and always slash-separated. The root itself is not
+	// recorded here; the session's working directory already is.
+	//
+	// It is the path that was looked at and never the path the bytes came
+	// from. Where the observer followed a symlink within the project the
+	// two differ, and only this one is recorded: where a link led is not a
+	// fact about the project, and recording it would put a path Axiom was
+	// asked to resolve into the log.
+	Path string `json:"path"`
+
+	Status HarnessStatus `json:"status"`
+
+	// Digest identifies the file's exact bytes and is set only where a file
+	// was observed. It is a digest and never a content sample: the bytes
+	// themselves are read, hashed, and dropped.
+	Digest string `json:"digest,omitempty"`
+}
+
+// HarnessKind says what an observed path is to the agent. It is recorded
+// rather than derived from the path later, so that a report never has to
+// recognize a component by parsing a string.
+type HarnessKind string
+
+const (
+	// HarnessProjectInstructions is the project's instruction file.
+	HarnessProjectInstructions HarnessKind = "project_instructions"
+	// HarnessProjectSettings is the project's shared settings file.
+	HarnessProjectSettings HarnessKind = "project_settings"
+	// HarnessLocalProjectSettings is the project's local settings file,
+	// which is where Axiom installs itself by default.
+	HarnessLocalProjectSettings HarnessKind = "local_project_settings"
+	// HarnessSubagentDirectory is the directory the project's subagent
+	// definitions live in. It carries no digest: it is the record that
+	// enumeration was attempted and what it found.
+	HarnessSubagentDirectory HarnessKind = "subagent_directory"
+	// HarnessSubagentDefinition is one subagent definition file.
+	HarnessSubagentDefinition HarnessKind = "subagent_definition"
+)
+
+// HarnessStatus is what Axiom established about a path.
+//
+// They are held apart because they answer different questions, and collapsing
+// any two of them would turn a limit of the observation into a statement about
+// the project.
+type HarnessStatus string
+
+const (
+	// HarnessObserved means Axiom read the path. A file carries the digest
+	// of what it read; a directory carries the definitions it enumerated.
+	HarnessObserved HarnessStatus = "observed"
+
+	// HarnessAbsent means nothing was there to read. It is a fact about
+	// that one path at that one moment, and says nothing about whether the
+	// agent had such configuration somewhere Axiom does not look.
+	HarnessAbsent HarnessStatus = "absent"
+
+	// HarnessUnreadable means something was there and Axiom did not
+	// establish its identity: a path it could not read, a path that was not
+	// a regular file, a file past the size it will read, or a directory
+	// holding more definitions than it will enumerate.
+	//
+	// It is deliberately not absent. A component Axiom could not read is
+	// not a component that was not there.
+	HarnessUnreadable HarnessStatus = "unreadable"
+
+	// HarnessNotFollowed means the path is a symbolic link Axiom did not
+	// read through. A link is followed only where it stays inside the
+	// project; one that leads out of it is not, and neither is an absolute
+	// one, so that a repository cannot name a file elsewhere on the machine
+	// and have Axiom read it.
+	//
+	// It is deliberately neither absent nor unreadable. Something is there,
+	// and what stopped the observation was the observer.
+	//
+	// The record does not say where the link led, and does not distinguish
+	// a link that left the project from one inside it whose target would
+	// not open. Both are links Axiom did not read through; telling them
+	// apart in the record would mean saying something about the target.
+	HarnessNotFollowed HarnessStatus = "not_followed"
+)
 
 // ToolCall describes one completed tool invocation.
 //
