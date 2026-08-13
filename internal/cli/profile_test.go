@@ -116,10 +116,33 @@ func TestProfileReportsCleanSession(t *testing.T) {
 		"Sessions analyzed   2",
 		"Tool calls          3",
 		"No redundant work or repeated failed attempts detected.",
-		"scoped to a single session and subagent, and every recorded",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+
+	// The empty state has to say what was not matched, and the scope it was
+	// not matched in. Naming the scope alone reads as though the reading had
+	// been cut up, which is one reason among several and not the usual one.
+	for _, want := range []string{
+		"A finding is one exact identity repeating",
+		"inside one session and subagent",
+		"which does not establish that nothing repeated",
+	} {
+		if !strings.Contains(flat(out), want) {
+			t.Errorf("the empty state does not say %q:\n%s", want, out)
+		}
+	}
+
+	// Nothing was established about the session, so nothing about it may be
+	// named. An empty findings section is not a verdict on the work.
+	for _, forbidden := range []string{
+		"efficient", "inefficient", "healthy", "clean run", "clean session",
+		"no problems", "nothing to investigate", "behaved",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("the empty state claims %q:\n%s", forbidden, out)
 		}
 	}
 }

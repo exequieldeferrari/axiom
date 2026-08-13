@@ -1,6 +1,6 @@
 # 20. Findings are not cross-capture evidence
 
-- Status: accepted
+- Status: accepted, with the question it left open answered by ADR 0021
 - Date: 2026-08-13
 
 ## Context
@@ -298,4 +298,8 @@ finding detail into compare rather than if the prose is reworded.
   real agent behavior, or that a sequence of calls delimited by barriers is the
   wrong primitive for describing what agents actually do badly, is answerable
   from records Axiom already writes, and it bears on `axiom profile` rather than
-  on comparison.
+  on comparison. *(Answered by ADR 0021. A fourteen-session corpus established
+  that what stopped the predicates was identity rather than the barriers, and
+  that the profile's value did not depend on a finding being present. The
+  primitive is kept, the detector is unchanged, and the product is framed around
+  the structural reconstruction instead.)*
