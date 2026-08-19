@@ -85,7 +85,7 @@ jobs:
 
       - name: Set up Node
         if: steps.fetch.outcome == 'success' && steps.eligible.outputs.skip == 'false' && env.HAS_COPILOT_TOKEN == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
